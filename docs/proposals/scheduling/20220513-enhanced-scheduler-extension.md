@@ -351,7 +351,7 @@ The K8s Scheduler Framework only supports summarizing and updating the results o
 
 ```bash
 # enables the debug-filters flags to output the Filter results
-$ curl -X POST schedulerIP:10251/debug/flags/f --data 'true' 
+$ curl -X PUT schedulerIP:10251/debug/flags/f --data 'true' 
 successfully set debugFilterFailure to true
 ```
 
@@ -363,7 +363,7 @@ For the processing of the results, we can simply print it to the log in markdown
 
 ```bash
 # print top 100 score results.
-$ curl -X POST schedulerIP:10251/debug/flags/s --data '100' 
+$ curl -X PUT schedulerIP:10251/debug/flags/s --data '100' 
 successfully set debugTopNScores to 100
 ```
 
