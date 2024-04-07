@@ -17,34 +17,52 @@ limitations under the License.
 package deviceshare
 
 import (
-	"fmt"
+	"context"
 	"sync"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/util/wait"
 	quotav1 "k8s.io/apiserver/pkg/quota/v1"
+	"k8s.io/client-go/informers"
 	"k8s.io/klog/v2"
 
 	apiext "github.com/koordinator-sh/koordinator/apis/extension"
 	schedulingv1alpha1 "github.com/koordinator-sh/koordinator/apis/scheduling/v1alpha1"
+	frameworkexthelper "github.com/koordinator-sh/koordinator/pkg/scheduler/frameworkext/helper"
+)
+
+const (
+	defaultGCPeriod = 3 * time.Second
 )
 
 type nodeDevice struct {
-	lock        sync.RWMutex
-	deviceTotal map[schedulingv1alpha1.DeviceType]deviceResources
-	deviceFree  map[schedulingv1alpha1.DeviceType]deviceResources
-	deviceUsed  map[schedulingv1alpha1.DeviceType]deviceResources
-	allocateSet map[schedulingv1alpha1.DeviceType]map[types.NamespacedName]deviceResources
+	lock          sync.RWMutex
+	deviceTotal   map[schedulingv1alpha1.DeviceType]deviceResources
+	deviceFree    map[schedulingv1alpha1.DeviceType]deviceResources
+	deviceUsed    map[schedulingv1alpha1.DeviceType]deviceResources
+	vfAllocations map[schedulingv1alpha1.DeviceType]*VFAllocation
+	allocateSet   map[schedulingv1alpha1.DeviceType]map[types.NamespacedName]deviceResources
+	numaTopology  *NUMATopology
+	deviceInfos   map[schedulingv1alpha1.DeviceType][]*schedulingv1alpha1.DeviceInfo
+}
+
+type VFAllocation struct {
+	allocatedVFs map[int]sets.String
 }
 
 func newNodeDevice() *nodeDevice {
 	return &nodeDevice{
-		deviceTotal: make(map[schedulingv1alpha1.DeviceType]deviceResources),
-		deviceFree:  make(map[schedulingv1alpha1.DeviceType]deviceResources),
-		deviceUsed:  make(map[schedulingv1alpha1.DeviceType]deviceResources),
-		allocateSet: make(map[schedulingv1alpha1.DeviceType]map[types.NamespacedName]deviceResources),
+		deviceTotal:   make(map[schedulingv1alpha1.DeviceType]deviceResources),
+		deviceFree:    make(map[schedulingv1alpha1.DeviceType]deviceResources),
+		deviceUsed:    make(map[schedulingv1alpha1.DeviceType]deviceResources),
+		vfAllocations: map[schedulingv1alpha1.DeviceType]*VFAllocation{},
+		allocateSet:   make(map[schedulingv1alpha1.DeviceType]map[types.NamespacedName]deviceResources),
+		numaTopology:  &NUMATopology{},
 	}
 }
 
@@ -136,42 +154,6 @@ func (n *nodeDevice) getUsed(namespace, name string) map[schedulingv1alpha1.Devi
 	return allocations
 }
 
-func (n *nodeDevice) replaceWith(freeDevices map[schedulingv1alpha1.DeviceType]deviceResources) *nodeDevice {
-	nn := newNodeDevice()
-	usedDevices := map[schedulingv1alpha1.DeviceType]deviceResources{}
-	for deviceType, total := range n.deviceTotal {
-		resources, ok := freeDevices[deviceType]
-		if !ok {
-			nn.deviceTotal[deviceType] = total.DeepCopy()
-			continue
-		}
-
-		deviceTotalResources := deviceResources{}
-		deviceUsedResources := deviceResources{}
-		for minor, free := range resources {
-			deviceTotalResources[minor] = total[minor].DeepCopy()
-			used := quotav1.SubtractWithNonNegativeResult(total[minor], free)
-			deviceUsedResources[minor] = used
-		}
-		nn.deviceTotal[deviceType] = deviceTotalResources
-		usedDevices[deviceType] = deviceUsedResources
-	}
-
-	for deviceType, used := range n.deviceUsed {
-		resources, ok := usedDevices[deviceType]
-		if !ok {
-			nn.deviceUsed[deviceType] = used.DeepCopy()
-			continue
-		}
-		nn.deviceUsed[deviceType] = resources
-	}
-
-	for deviceType := range nn.deviceTotal {
-		nn.resetDeviceFree(deviceType)
-	}
-	return nn
-}
-
 func (n *nodeDevice) resetDeviceFree(deviceType schedulingv1alpha1.DeviceType) {
 	if n.deviceFree[deviceType] == nil {
 		n.deviceFree[deviceType] = make(deviceResources)
@@ -215,6 +197,7 @@ func (n *nodeDevice) updateDeviceUsed(deviceType schedulingv1alpha1.DeviceType, 
 	if !add && len(deviceUsed) == 0 {
 		delete(n.deviceUsed, deviceType)
 	}
+	n.updateCacheVFAllocations(deviceType, allocations, add)
 }
 
 func (n *nodeDevice) isValid(deviceType schedulingv1alpha1.DeviceType, namespace string, name string, add bool) bool {
@@ -259,110 +242,73 @@ func (n *nodeDevice) updateAllocateSet(deviceType schedulingv1alpha1.DeviceType,
 	}
 }
 
-func (n *nodeDevice) tryAllocateDevice(podRequest corev1.ResourceList, required, preferred map[schedulingv1alpha1.DeviceType]sets.Int, requiredDeviceResources, preemptibleDeviceResources map[schedulingv1alpha1.DeviceType]deviceResources) (apiext.DeviceAllocations, error) {
-	allocateResult := make(apiext.DeviceAllocations)
-
-	for deviceType, supportedResourceNames := range DeviceResourceNames {
-		deviceRequest := quotav1.Mask(podRequest, supportedResourceNames)
-		if quotav1.IsZero(deviceRequest) {
-			continue
-		}
-		err := n.tryAllocateDeviceByType(
-			deviceRequest,
-			deviceType,
-			required[deviceType],
-			preferred[deviceType],
-			allocateResult,
-			requiredDeviceResources[deviceType],
-			preemptibleDeviceResources[deviceType],
-		)
-		if err != nil {
-			return nil, err
-		}
+func (n *nodeDevice) updateCacheVFAllocations(deviceType schedulingv1alpha1.DeviceType, allocations []*apiext.DeviceAllocation, add bool) {
+	vfAllocations := getVFAllocations(allocations)
+	if vfAllocations == nil {
+		return
 	}
-
-	return allocateResult, nil
+	if add {
+		n.updateVFAllocations(deviceType, vfAllocations)
+	} else {
+		n.removeVFAllocations(deviceType, vfAllocations)
+	}
 }
 
-func (n *nodeDevice) tryAllocateDeviceByType(
-	podRequest corev1.ResourceList,
-	deviceType schedulingv1alpha1.DeviceType,
-	required sets.Int,
-	preferred sets.Int,
-	allocateResult apiext.DeviceAllocations,
-	requiredDeviceResources deviceResources,
-	preemptibleDeviceResources deviceResources,
-) error {
-	nodeDeviceTotal := n.deviceTotal[deviceType]
-	if len(nodeDeviceTotal) == 0 {
-		return fmt.Errorf("node does not have enough %v", deviceType)
+func (n *nodeDevice) updateVFAllocations(deviceType schedulingv1alpha1.DeviceType, vfAllocations *VFAllocation) {
+	allocations := n.vfAllocations[deviceType]
+	if allocations == nil {
+		allocations = &VFAllocation{allocatedVFs: map[int]sets.String{}}
+		n.vfAllocations[deviceType] = allocations
 	}
-
-	var freeDevices deviceResources
-	if len(requiredDeviceResources) > 0 {
-		freeDevices = requiredDeviceResources
-	} else {
-		freeDevices = n.calcFreeWithPreemptible(deviceType, preemptibleDeviceResources)
-	}
-
-	if deviceType == schedulingv1alpha1.GPU {
-		if err := fillGPUTotalMem(nodeDeviceTotal, podRequest); err != nil {
-			return err
-		}
-	}
-
-	var deviceAllocations []*apiext.DeviceAllocation
-	deviceWanted := int64(1)
-	podRequestPerCard := podRequest
-	if isPodRequestsMultipleDevice(podRequest, deviceType) {
-		switch deviceType {
-		case schedulingv1alpha1.GPU:
-			gpuCore, gpuMem, gpuMemoryRatio := podRequest[apiext.ResourceGPUCore], podRequest[apiext.ResourceGPUMemory], podRequest[apiext.ResourceGPUMemoryRatio]
-			deviceWanted = gpuMemoryRatio.Value() / 100
-			podRequestPerCard = corev1.ResourceList{
-				apiext.ResourceGPUCore:        *resource.NewQuantity(gpuCore.Value()/deviceWanted, resource.DecimalSI),
-				apiext.ResourceGPUMemory:      *resource.NewQuantity(gpuMem.Value()/deviceWanted, resource.BinarySI),
-				apiext.ResourceGPUMemoryRatio: *resource.NewQuantity(gpuMemoryRatio.Value()/deviceWanted, resource.DecimalSI),
-			}
-		case schedulingv1alpha1.RDMA:
-			commonDevice := podRequest[apiext.ResourceRDMA]
-			deviceWanted = commonDevice.Value() / 100
-			podRequestPerCard = corev1.ResourceList{
-				apiext.ResourceRDMA: *resource.NewQuantity(commonDevice.Value()/deviceWanted, resource.DecimalSI),
-			}
-		case schedulingv1alpha1.FPGA:
-			commonDevice := podRequest[apiext.ResourceFPGA]
-			deviceWanted = commonDevice.Value() / 100
-			podRequestPerCard = corev1.ResourceList{
-				apiext.ResourceFPGA: *resource.NewQuantity(commonDevice.Value()/deviceWanted, resource.DecimalSI),
-			}
-		}
-	}
-
-	satisfiedDeviceCount := 0
-	orderedDeviceResources := sortDeviceResourcesByMinor(freeDevices, preferred)
-	for _, deviceResource := range orderedDeviceResources {
-		if required.Len() > 0 && !required.Has(deviceResource.minor) {
+	for minor, vfs := range vfAllocations.allocatedVFs {
+		s := allocations.allocatedVFs[minor]
+		if s == nil {
+			allocations.allocatedVFs[minor] = vfs
 			continue
 		}
-		// Skip unhealthy Device instances with zero resources
-		if quotav1.IsZero(deviceResource.resources) {
-			continue
-		}
-		if satisfied, _ := quotav1.LessThanOrEqual(podRequestPerCard, deviceResource.resources); satisfied {
-			satisfiedDeviceCount++
-			deviceAllocations = append(deviceAllocations, &apiext.DeviceAllocation{
-				Minor:     int32(deviceResource.minor),
-				Resources: podRequestPerCard,
-			})
-		}
-		if satisfiedDeviceCount == int(deviceWanted) {
-			allocateResult[deviceType] = deviceAllocations
-			return nil
+		for vf := range vfs {
+			s.Insert(vf)
 		}
 	}
-	klog.V(5).Infof("node resource does not satisfy pod's multiple %v request, expect %v, got %v", deviceType, deviceWanted, satisfiedDeviceCount)
-	return fmt.Errorf("node does not have enough %v", deviceType)
+}
+
+func (n *nodeDevice) removeVFAllocations(deviceType schedulingv1alpha1.DeviceType, vfAllocations *VFAllocation) {
+	vfAlloc := n.vfAllocations[deviceType]
+	if vfAlloc == nil {
+		return
+	}
+	for minor, vfs := range vfAllocations.allocatedVFs {
+		old := vfAlloc.allocatedVFs[minor]
+		for v := range vfs {
+			old.Delete(v)
+		}
+		if len(old) == 0 {
+			delete(vfAlloc.allocatedVFs, minor)
+		}
+	}
+	if len(vfAlloc.allocatedVFs) == 0 {
+		delete(n.vfAllocations, deviceType)
+	}
+}
+
+func getVFAllocations(allocations []*apiext.DeviceAllocation) *VFAllocation {
+	var vfAllocation *VFAllocation
+	for _, v := range allocations {
+		if v.Extension == nil || len(v.Extension.VirtualFunctions) == 0 {
+			continue
+		}
+		if vfAllocation == nil {
+			vfAllocation = &VFAllocation{
+				allocatedVFs: map[int]sets.String{},
+			}
+		}
+		vfs := sets.NewString()
+		for _, vf := range v.Extension.VirtualFunctions {
+			vfs.Insert(vf.BusID)
+		}
+		vfAllocation.allocatedVFs[int(v.Minor)] = vfs
+	}
+	return vfAllocation
 }
 
 func (n *nodeDevice) calcFreeWithPreemptible(deviceType schedulingv1alpha1.DeviceType, preemptible deviceResources) deviceResources {
@@ -395,10 +341,100 @@ func (n *nodeDevice) calcFreeWithPreemptible(deviceType schedulingv1alpha1.Devic
 	return deviceFree
 }
 
+func (n *nodeDevice) filter(
+	devices map[schedulingv1alpha1.DeviceType][]int,
+	hints apiext.DeviceAllocateHints,
+	requiredDeviceResources, preemptibleDeviceResources map[schedulingv1alpha1.DeviceType]deviceResources,
+) *nodeDevice {
+	total := map[schedulingv1alpha1.DeviceType]deviceResources{}
+	used := map[schedulingv1alpha1.DeviceType]deviceResources{}
+	for deviceType, deviceMinors := range devices {
+		var freeDevices deviceResources
+		requiredResources := requiredDeviceResources[deviceType]
+		if len(requiredResources) > 0 {
+			freeDevices = requiredResources
+		} else {
+			freeDevices = n.calcFreeWithPreemptible(deviceType, preemptibleDeviceResources[deviceType])
+		}
+
+		if freeDevices.isZero() {
+			continue
+		}
+
+		minors := sets.NewInt(deviceMinors...)
+		hint := hints[deviceType]
+		if hint != nil && hint.ExclusivePolicy == apiext.PCIExpressLevelDeviceExclusivePolicy {
+			freeDeviceMinors := filterFreeDevicesByPCIe(n, freeDevices, deviceType)
+			minors.Intersection(freeDeviceMinors)
+		}
+
+		originalTotal := n.deviceTotal[deviceType]
+		totalByDeviceType := deviceResources{}
+		usedByDeviceType := deviceResources{}
+		for minor, free := range freeDevices {
+			if minors.Has(minor) {
+				totalByDeviceType[minor] = originalTotal[minor].DeepCopy()
+				usedByDeviceTypeOfMinor := quotav1.SubtractWithNonNegativeResult(originalTotal[minor], free)
+				if !quotav1.IsZero(usedByDeviceTypeOfMinor) {
+					usedByDeviceType[minor] = usedByDeviceTypeOfMinor
+				}
+
+			}
+		}
+
+		total[deviceType] = totalByDeviceType
+		used[deviceType] = usedByDeviceType
+	}
+	r := newNodeDevice()
+	r.deviceUsed = used
+	r.resetDeviceTotal(total)
+	r.vfAllocations = n.vfAllocations
+	r.numaTopology = n.numaTopology
+	r.deviceInfos = n.deviceInfos
+	return r
+}
+
+func filterFreeDevicesByPCIe(n *nodeDevice, freeDeviceResources deviceResources, deviceType schedulingv1alpha1.DeviceType) sets.Int {
+	minors := sets.NewInt()
+	totalDeviceResources := n.deviceTotal[deviceType]
+	for _, pcies := range n.numaTopology.nodes {
+		for _, pcie := range pcies {
+			skipped := false
+			for _, minor := range pcie.devices[deviceType] {
+				totalRes := totalDeviceResources[minor]
+				freeRes := freeDeviceResources[minor]
+				if !quotav1.Equals(totalRes, freeRes) {
+					skipped = true
+					break
+				}
+			}
+			if !skipped {
+				minors.Insert(pcie.devices[deviceType]...)
+			}
+		}
+	}
+	return minors
+}
+
+func (n *nodeDevice) split(requestsPerInstance corev1.ResourceList, deviceType schedulingv1alpha1.DeviceType) deviceResources {
+	if quotav1.IsZero(requestsPerInstance) {
+		return nil
+	}
+	var r deviceResources
+	for minor, free := range n.deviceFree[deviceType] {
+		if satisfied, _ := quotav1.LessThanOrEqual(requestsPerInstance, free); satisfied {
+			if r == nil {
+				r = make(deviceResources)
+			}
+			r[minor] = requestsPerInstance
+		}
+	}
+	return r
+}
+
 type nodeDeviceCache struct {
 	lock sync.Mutex
-	// nodeDeviceInfos stores nodeDevice for each node
-	// and uses node name as map key.
+	// nodeDeviceInfos stores nodeDevice for each node.
 	nodeDeviceInfos map[string]*nodeDevice
 }
 
@@ -430,34 +466,64 @@ func (n *nodeDeviceCache) removeNodeDevice(nodeName string) {
 	delete(n.nodeDeviceInfos, nodeName)
 }
 
+func (n *nodeDeviceCache) invalidateNodeDevice(device *schedulingv1alpha1.Device) {
+	device = device.DeepCopy()
+	for i := range device.Spec.Devices {
+		info := &device.Spec.Devices[i]
+		info.Health = false
+	}
+
+	nodeDeviceResource := buildDeviceResources(device)
+
+	n.lock.Lock()
+	defer n.lock.Unlock()
+	info := n.nodeDeviceInfos[device.Name]
+	if info == nil {
+		return
+	}
+	info.lock.Lock()
+	defer info.lock.Unlock()
+	info.resetDeviceTotal(nodeDeviceResource)
+}
+
 func (n *nodeDeviceCache) updateNodeDevice(nodeName string, device *schedulingv1alpha1.Device) {
 	if nodeName == "" || device == nil {
 		return
 	}
 
+	nodeDeviceResource := buildDeviceResources(device)
+	numaTopology := newNUMATopology(device)
+	deviceInfos := map[schedulingv1alpha1.DeviceType][]*schedulingv1alpha1.DeviceInfo{}
+	for i := range device.Spec.Devices {
+		info := &device.Spec.Devices[i]
+		deviceInfos[info.Type] = append(deviceInfos[info.Type], info)
+	}
 	info := n.getNodeDevice(nodeName, true)
-
 	info.lock.Lock()
 	defer info.lock.Unlock()
+	info.resetDeviceTotal(nodeDeviceResource)
+	info.numaTopology = numaTopology
+	info.deviceInfos = deviceInfos
+}
 
+func buildDeviceResources(device *schedulingv1alpha1.Device) map[schedulingv1alpha1.DeviceType]deviceResources {
 	nodeDeviceResource := map[schedulingv1alpha1.DeviceType]deviceResources{}
 	for _, deviceInfo := range device.Spec.Devices {
 		if nodeDeviceResource[deviceInfo.Type] == nil {
 			nodeDeviceResource[deviceInfo.Type] = make(deviceResources)
 		}
-		if !deviceInfo.Health {
-			nodeDeviceResource[deviceInfo.Type][int(*deviceInfo.Minor)] = make(corev1.ResourceList)
-			klog.Errorf("Find device unhealthy, nodeName:%v, deviceType:%v, minor:%v",
-				nodeName, deviceInfo.Type, deviceInfo.Minor)
-		} else {
-			resources := deviceInfo.Resources
-			nodeDeviceResource[deviceInfo.Type][int(*deviceInfo.Minor)] = resources
-			klog.V(5).Infof("Find device resource update, nodeName:%v, deviceType:%v, minor:%v, res:%v",
-				nodeName, deviceInfo.Type, deviceInfo.Minor, resources)
-		}
-	}
 
-	info.resetDeviceTotal(nodeDeviceResource)
+		var resources corev1.ResourceList
+		if !deviceInfo.Health {
+			resources = make(corev1.ResourceList)
+			klog.Errorf("Find device unhealthy, nodeName:%v, deviceType:%v, minor:%v", device.Name, deviceInfo.Type, deviceInfo.Minor)
+		} else {
+			resources = deviceInfo.Resources
+			klog.V(5).Infof("Find device resource update, nodeName:%v, deviceType:%v, minor:%v, res:%v", device.Name, deviceInfo.Type, deviceInfo.Minor, resources)
+		}
+		nodeDeviceResource[deviceInfo.Type][int(*deviceInfo.Minor)] = resources
+	}
+	return nodeDeviceResource
 }
 
 func (n *nodeDeviceCache) getNodeDeviceSummary(nodeName string) (*NodeDeviceSummary, bool) {
@@ -481,4 +547,31 @@ func (n *nodeDeviceCache) getAllNodeDeviceSummary() map[string]*NodeDeviceSummar
 		nodeDeviceSummaries[nodeName] = nodeDeviceInfo.getNodeDeviceSummary()
 	}
 	return nodeDeviceSummaries
+}
+
+func (n *nodeDeviceCache) gcNodeDevice(ctx context.Context, informerFactory informers.SharedInformerFactory, period time.Duration) {
+	nodeInformer := informerFactory.Core().V1().Nodes().Informer()
+	frameworkexthelper.ForceSyncFromInformer(ctx.Done(), informerFactory, nodeInformer, nil)
+
+	wait.UntilWithContext(ctx, func(ctx context.Context) {
+		nodeLister := informerFactory.Core().V1().Nodes().Lister()
+		nodes, err := nodeLister.List(labels.Everything())
+		if err != nil {
+			klog.ErrorS(err, "Failed to nodeLister.List")
+			return
+		}
+		nodeNames := make(sets.String, len(nodes))
+		for _, v := range nodes {
+			nodeNames.Insert(v.Name)
+		}
+
+		n.lock.Lock()
+		defer n.lock.Unlock()
+		for name := range n.nodeDeviceInfos {
+			if !nodeNames.Has(name) {
+				delete(n.nodeDeviceInfos, name)
+				klog.InfoS("nodeDevice has been removed since missing Node object", "node", name)
+			}
+		}
+	}, period)
 }

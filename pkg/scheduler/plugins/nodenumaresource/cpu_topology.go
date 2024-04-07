@@ -43,7 +43,6 @@ func NewCPUTopologyBuilder() *CPUTopologyBuilder {
 
 func (b *CPUTopologyBuilder) AddCPUInfo(socketID, nodeID, coreID, cpuID int) *CPUTopologyBuilder {
 	coreID = socketID<<16 | coreID
-	nodeID = socketID<<16 | nodeID
 	cpuInfo := &CPUInfo{
 		CPUID:    cpuID,
 		CoreID:   coreID,
@@ -76,7 +75,7 @@ func (b *CPUTopologyBuilder) Result() *CPUTopology {
 
 // IsValid checks if the topology is valid
 func (topo *CPUTopology) IsValid() bool {
-	return topo.NumSockets != 0 && topo.NumNodes != 0 && topo.NumCores != 0 && topo.NumCPUs != 0
+	return topo != nil && topo.NumSockets != 0 && topo.NumNodes != 0 && topo.NumCores != 0 && topo.NumCPUs != 0
 }
 
 // CPUsPerCore returns the number of logical CPUs are associated with each core.

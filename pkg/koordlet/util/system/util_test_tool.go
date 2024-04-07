@@ -19,12 +19,10 @@ package system
 import (
 	"fmt"
 	"os"
-	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
-
-	"k8s.io/klog/v2"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -60,26 +58,30 @@ type FileTestUtil struct {
 	TempDir string
 	// whether to validate when writing cgroups resources
 	ValidateResource bool
+	// additional cleanup function for Config to be invoked in Cleanup()
+	CleanupFn func(config *Config)
 
-	t *testing.T
+	t testing.TB
 }
 
 // NewFileTestUtil creates a new test util for the specified subsystem.
 // NOTE: this function should be called only for testing purposes.
-func NewFileTestUtil(t *testing.T) *FileTestUtil {
+func NewFileTestUtil(t testing.TB) *FileTestUtil {
 	// NOTE: When $TMPDIR is not set, `t.TempDir()` can use different base directory on Mac OS X and Linux, which may
 	// generates too long paths to test unix socket.
 	t.Setenv("TMPDIR", "/tmp")
 	tempDir := t.TempDir()
 	HostSystemInfo.IsAnolisOS = true
 
-	Conf.ProcRootDir = path.Join(tempDir, "proc")
+	Conf.ProcRootDir = filepath.Join(tempDir, "proc")
 	err := os.MkdirAll(Conf.ProcRootDir, 0777)
 	assert.NoError(t, err)
 	Conf.CgroupRootDir = tempDir
 	Conf.SysRootDir = tempDir
+	Conf.SysFSRootDir = filepath.Join(tempDir, "fs")
+	Conf.VarRunRootDir = tempDir
 
-	initSupportConfigs()
+	InitSupportConfigs()
 
 	return &FileTestUtil{
 		TempDir:          tempDir,
@@ -94,6 +96,9 @@ func (c *FileTestUtil) Cleanup() {
 		assert.NoError(c.t, err)
 	}
 	initCgroupsVersion()
+	if c.CleanupFn != nil {
+		c.CleanupFn(Conf)
+	}
 }
 
 func (c *FileTestUtil) SetResourcesSupported(supported bool, resources ...Resource) {
@@ -114,11 +119,16 @@ func (c *FileTestUtil) SetValidateResource(enabled bool) {
 	c.ValidateResource = enabled
 }
 
+func (c *FileTestUtil) SetConf(setFn, cleanupFn func(conf *Config)) {
+	setFn(Conf)
+	c.CleanupFn = cleanupFn
+}
+
 // if dir contain TempDir, mkdir direct, else join with TempDir and mkdir
 func (c *FileTestUtil) MkDirAll(testDir string) {
 	dir := testDir
 	if !strings.Contains(dir, c.TempDir) {
-		dir = path.Join(c.TempDir, testDir)
+		dir = filepath.Join(c.TempDir, testDir)
 	}
 	if err := os.MkdirAll(dir, 0777); err != nil {
 		c.t.Fatal(err)
@@ -129,9 +139,9 @@ func (c *FileTestUtil) MkDirAll(testDir string) {
 func (c *FileTestUtil) CreateFile(testFilePath string) {
 	filePath := testFilePath
 	if !strings.Contains(filePath, c.TempDir) {
-		filePath = path.Join(c.TempDir, testFilePath)
+		filePath = filepath.Join(c.TempDir, testFilePath)
 	}
-	dir, _ := path.Split(filePath)
+	dir, _ := filepath.Split(filePath)
 	if err := os.MkdirAll(dir, 0777); err != nil {
 		c.t.Fatal(err)
 	}
@@ -144,7 +154,7 @@ func (c *FileTestUtil) CreateFile(testFilePath string) {
 func (c *FileTestUtil) WriteFileContents(testFilePath, contents string) {
 	filePath := testFilePath
 	if !strings.Contains(filePath, c.TempDir) {
-		filePath = path.Join(c.TempDir, testFilePath)
+		filePath = filepath.Join(c.TempDir, testFilePath)
 	}
 	if !FileExists(filePath) {
 		c.CreateFile(testFilePath)
@@ -159,7 +169,7 @@ func (c *FileTestUtil) WriteFileContents(testFilePath, contents string) {
 func (c *FileTestUtil) ReadFileContents(testFilePath string) string {
 	filePath := testFilePath
 	if !strings.Contains(filePath, c.TempDir) {
-		filePath = path.Join(c.TempDir, testFilePath)
+		filePath = filepath.Join(c.TempDir, testFilePath)
 	}
 	contents, err := os.ReadFile(filePath)
 	if err != nil {
@@ -169,8 +179,8 @@ func (c *FileTestUtil) ReadFileContents(testFilePath string) string {
 }
 
 func (c *FileTestUtil) CreateProcSubFile(fileRelativePath string) {
-	file := path.Join(Conf.ProcRootDir, fileRelativePath)
-	dir, _ := path.Split(file)
+	file := filepath.Join(Conf.ProcRootDir, fileRelativePath)
+	dir, _ := filepath.Split(file)
 	if err := os.MkdirAll(dir, 0777); err != nil {
 		c.t.Fatal(err)
 	}
@@ -180,7 +190,7 @@ func (c *FileTestUtil) CreateProcSubFile(fileRelativePath string) {
 }
 
 func (c *FileTestUtil) WriteProcSubFileContents(relativeFilePath string, contents string) {
-	file := path.Join(Conf.ProcRootDir, relativeFilePath)
+	file := filepath.Join(Conf.ProcRootDir, relativeFilePath)
 	if !FileExists(file) {
 		c.CreateProcSubFile(relativeFilePath)
 	}
@@ -191,7 +201,7 @@ func (c *FileTestUtil) WriteProcSubFileContents(relativeFilePath string, content
 }
 
 func (c *FileTestUtil) ReadProcSubFileContents(relativeFilePath string) string {
-	file := path.Join(Conf.ProcRootDir, relativeFilePath)
+	file := filepath.Join(Conf.ProcRootDir, relativeFilePath)
 	contents, err := os.ReadFile(file)
 	if err != nil {
 		c.t.Fatal(err)
@@ -204,7 +214,7 @@ func (c *FileTestUtil) CreateCgroupFile(taskDir string, r Resource) {
 	c.SetCgroupsV2(IsCgroupV2Resource(r))
 
 	filePath := GetCgroupFilePath(taskDir, r)
-	dir, _ := path.Split(filePath)
+	dir, _ := filepath.Split(filePath)
 	if err := os.MkdirAll(dir, 0777); err != nil {
 		c.t.Fatal(err)
 	}
@@ -234,7 +244,7 @@ func (c *FileTestUtil) WriteCgroupFileContents(taskDir string, r Resource, conte
 		}
 	}
 	filePath = r.Path(taskDir)
-	klog.V(5).Infof("write %s [%s]", filePath, contents)
+	c.t.Logf("write %s [%s]", filePath, contents)
 
 	err := os.WriteFile(filePath, []byte(contents), 0644)
 	if err != nil {

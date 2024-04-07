@@ -24,6 +24,7 @@ import (
 	"github.com/koordinator-sh/koordinator/pkg/features"
 	"github.com/koordinator-sh/koordinator/pkg/koordlet/resourceexecutor"
 	"github.com/koordinator-sh/koordinator/pkg/koordlet/runtimehooks/hooks"
+	"github.com/koordinator-sh/koordinator/pkg/koordlet/runtimehooks/nri"
 	"github.com/koordinator-sh/koordinator/pkg/koordlet/runtimehooks/proxyserver"
 	"github.com/koordinator-sh/koordinator/pkg/koordlet/runtimehooks/reconciler"
 	"github.com/koordinator-sh/koordinator/pkg/koordlet/runtimehooks/rule"
@@ -40,10 +41,13 @@ type RuntimeHook interface {
 }
 
 type runtimeHook struct {
-	statesInformer statesinformer.StatesInformer
-	server         proxyserver.Server
-	reconciler     reconciler.Reconciler
-	executor       resourceexecutor.ResourceUpdateExecutor
+	statesInformer    statesinformer.StatesInformer
+	server            proxyserver.Server
+	nriServer         *nri.NriServer
+	reconciler        reconciler.Reconciler
+	hostAppReconciler reconciler.Reconciler
+	reader            resourceexecutor.CgroupReader
+	executor          resourceexecutor.ResourceUpdateExecutor
 }
 
 func (r *runtimeHook) Run(stopCh <-chan struct{}) error {
@@ -52,7 +56,18 @@ func (r *runtimeHook) Run(stopCh <-chan struct{}) error {
 	if err := r.server.Start(); err != nil {
 		return err
 	}
+	if r.nriServer != nil {
+		if err := r.nriServer.Start(); err != nil {
+			// if NRI is not enabled or container runtime not support NRI, we just skip NRI server start
+			klog.Errorf("nri mode runtime hook server start failed: %v", err)
+		} else {
+			klog.V(4).Infof("nri mode runtime hook server has started")
+		}
+	}
 	if err := r.reconciler.Run(stopCh); err != nil {
+		return err
+	}
+	if err := r.hostAppReconciler.Run(stopCh); err != nil {
 		return err
 	}
 	if err := r.server.Register(); err != nil {
@@ -73,6 +88,7 @@ func NewRuntimeHook(si statesinformer.StatesInformer, cfg *Config) (RuntimeHook,
 	if err != nil {
 		return nil, err
 	}
+	cr := resourceexecutor.NewCgroupReader()
 	e := resourceexecutor.NewResourceUpdateExecutor()
 	newServerOptions := proxyserver.Options{
 		Network:             cfg.RuntimeHooksNetwork,
@@ -84,13 +100,32 @@ func NewRuntimeHook(si statesinformer.StatesInformer, cfg *Config) (RuntimeHook,
 		DisableStages:       getDisableStagesMap(cfg.RuntimeHookDisableStages),
 		Executor:            e,
 	}
+
+	var nriServer *nri.NriServer
+	if cfg.RuntimeHooksNRI {
+		nriServerOptions := nri.Options{
+			NriSocketPath:       cfg.RuntimeHooksNRISocketPath,
+			PluginFailurePolicy: pluginFailurePolicy,
+			DisableStages:       getDisableStagesMap(cfg.RuntimeHookDisableStages),
+			Executor:            e,
+		}
+		nriServer, err = nri.NewNriServer(nriServerOptions)
+		if err != nil {
+			klog.Warningf("new nri mode runtimehooks server error: %v", err)
+		}
+	} else {
+		klog.V(4).Info("nri mode runtimehooks is disabled")
+	}
+
 	s, err := proxyserver.NewServer(newServerOptions)
-	newReconcilerOptions := reconciler.Options{
-		StatesInformer: si,
-		Executor:       e,
+	newReconcilerCtx := reconciler.Context{
+		StatesInformer:    si,
+		Executor:          e,
+		ReconcileInterval: cfg.RuntimeHookReconcileInterval,
 	}
 
 	newPluginOptions := hooks.Options{
+		Reader:   cr,
 		Executor: e,
 	}
 
@@ -98,18 +133,26 @@ func NewRuntimeHook(si statesinformer.StatesInformer, cfg *Config) (RuntimeHook,
 		return nil, err
 	}
 	r := &runtimeHook{
-		statesInformer: si,
-		server:         s,
-		reconciler:     reconciler.NewReconciler(newReconcilerOptions),
-		executor:       e,
+		statesInformer:    si,
+		server:            s,
+		nriServer:         nriServer,
+		reconciler:        reconciler.NewReconciler(newReconcilerCtx),
+		hostAppReconciler: reconciler.NewHostAppReconciler(newReconcilerCtx),
+		reader:            cr,
+		executor:          e,
 	}
 	registerPlugins(newPluginOptions)
 	si.RegisterCallbacks(statesinformer.RegisterTypeNodeSLOSpec, "runtime-hooks-rule-node-slo",
 		"Update hooks rule can run callbacks if NodeSLO spec update",
 		rule.UpdateRules)
 	si.RegisterCallbacks(statesinformer.RegisterTypeNodeTopology, "runtime-hooks-rule-node-topo",
-		"Update hooks rule if NodeTopology infor update",
+		"Update hooks rule if NodeTopology info update",
 		rule.UpdateRules)
+	si.RegisterCallbacks(statesinformer.RegisterTypeNodeMetadata, "runtime-hooks-rule-node-metadata",
+		"Update hooks rule if Node metadata update",
+		rule.UpdateRules)
+	si.RegisterCallbacks(statesinformer.RegisterTypeAllPods, "runtime-hooks-rule-all-pods",
+		"Update hooks rule of all Pods refresh", rule.UpdateRules)
 	if err := s.Setup(); err != nil {
 		return nil, fmt.Errorf("failed to setup runtime hook server, error %v", err)
 	}

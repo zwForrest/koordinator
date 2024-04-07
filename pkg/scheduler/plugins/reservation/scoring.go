@@ -21,11 +21,13 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"sync/atomic"
 
 	corev1 "k8s.io/api/core/v1"
 	quotav1 "k8s.io/apiserver/pkg/quota/v1"
 	resourceapi "k8s.io/kubernetes/pkg/api/v1/resource"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
+	"k8s.io/kubernetes/pkg/scheduler/framework/parallelize"
 	pluginhelper "k8s.io/kubernetes/pkg/scheduler/framework/plugins/helper"
 
 	apiext "github.com/koordinator-sh/koordinator/apis/extension"
@@ -47,7 +49,14 @@ func (pl *Plugin) PreScore(ctx context.Context, cycleState *framework.CycleState
 		return nil
 	}
 
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	nominatedReservations := make([]*frameworkext.ReservationInfo, len(state.nodeReservationStates))
+	var nominatedNodeIndex int32
+
 	nodeOrders := make([]int64, len(nodes))
+	errCh := parallelize.NewErrorChannel()
 	pl.handle.Parallelizer().Until(ctx, len(nodes), func(piece int) {
 		node := nodes[piece]
 		reservationInfos := state.nodeReservationStates[node.Name].matched
@@ -56,7 +65,27 @@ func (pl *Plugin) PreScore(ctx context.Context, cycleState *framework.CycleState
 		}
 		_, order := findMostPreferredReservationByOrder(reservationInfos)
 		nodeOrders[piece] = order
+
+		nominatedReservationInfo, status := pl.handle.GetReservationNominator().NominateReservation(ctx, cycleState, pod, node.Name)
+		if !status.IsSuccess() {
+			errCh.SendErrorWithCancel(status.AsError(), cancel)
+			return
+		}
+
+		if nominatedReservationInfo != nil {
+			index := atomic.AddInt32(&nominatedNodeIndex, 1)
+			nominatedReservations[index-1] = nominatedReservationInfo
+		}
 	})
+	if err := errCh.ReceiveError(); err != nil {
+		return framework.AsStatus(err)
+	}
+
+	nominatedReservations = nominatedReservations[:nominatedNodeIndex]
+	for _, v := range nominatedReservations {
+		pl.handle.GetReservationNominator().AddNominatedReservation(pod, v.GetNodeName(), v)
+	}
+
 	var selectOrder int64 = math.MaxInt64
 	var nodeIndex int
 	for i, order := range nodeOrders {
@@ -82,19 +111,12 @@ func (pl *Plugin) Score(ctx context.Context, cycleState *framework.CycleState, p
 		return mostPreferredScore, nil
 	}
 
-	reservationInfos := state.nodeReservationStates[nodeName].matched
-	if len(reservationInfos) == 0 {
+	reservationInfo := pl.handle.GetReservationNominator().GetNominatedReservation(pod, nodeName)
+	if reservationInfo == nil {
 		return framework.MinNodeScore, nil
 	}
 
-	var maxScore int64
-	for _, rInfo := range reservationInfos {
-		score := scoreReservation(pod, rInfo)
-		if score > maxScore {
-			maxScore = score
-		}
-	}
-	return maxScore, nil
+	return pl.ScoreReservation(ctx, cycleState, pod, reservationInfo, nodeName)
 }
 
 func (pl *Plugin) ScoreExtensions() framework.ScoreExtensions {
@@ -123,7 +145,18 @@ func (pl *Plugin) ScoreReservation(ctx context.Context, cycleState *framework.Cy
 		return 0, framework.AsStatus(fmt.Errorf("impossible, there is no relevant Reservation information"))
 	}
 
-	return scoreReservation(pod, rInfo), nil
+	preemptibleInRR := state.preemptibleInRRs[nodeName][rInfo.UID()]
+	allocated := rInfo.Allocated
+	if len(preemptibleInRR) > 0 {
+		allocated = quotav1.SubtractWithNonNegativeResult(allocated, preemptibleInRR)
+		allocated = quotav1.Mask(allocated, rInfo.ResourceNames)
+	}
+
+	return scoreReservation(pod, rInfo, allocated), nil
+}
+
+func (pl *Plugin) ReservationScoreExtensions() frameworkext.ReservationScoreExtensions {
+	return nil
 }
 
 func findMostPreferredReservationByOrder(rOnNode []*frameworkext.ReservationInfo) (*frameworkext.ReservationInfo, int64) {
@@ -147,14 +180,11 @@ func findMostPreferredReservationByOrder(rOnNode []*frameworkext.ReservationInfo
 	return highOrder, selectOrder
 }
 
-func scoreReservation(pod *corev1.Pod, reservation *frameworkext.ReservationInfo) int64 {
+func scoreReservation(pod *corev1.Pod, rInfo *frameworkext.ReservationInfo, allocated corev1.ResourceList) int64 {
 	// TODO(joseph): we should support zero-request pods
 	requested, _ := resourceapi.PodRequestsAndLimits(pod)
-	if allocated := reservation.Allocated; allocated != nil {
-		// consider multi owners sharing one reservation
-		requested = quotav1.Add(requested, allocated)
-	}
-	resources := quotav1.RemoveZeros(reservation.Allocatable)
+	requested = quotav1.Add(requested, allocated)
+	resources := quotav1.RemoveZeros(rInfo.Allocatable)
 
 	w := int64(len(resources))
 	if w <= 0 {

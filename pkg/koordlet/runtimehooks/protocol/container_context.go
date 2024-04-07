@@ -18,7 +18,9 @@ package protocol
 
 import (
 	"fmt"
+	"strings"
 
+	"github.com/containerd/nri/pkg/api"
 	"k8s.io/klog/v2"
 
 	apiext "github.com/koordinator-sh/koordinator/apis/extension"
@@ -27,6 +29,7 @@ import (
 	"github.com/koordinator-sh/koordinator/pkg/koordlet/resourceexecutor"
 	"github.com/koordinator-sh/koordinator/pkg/koordlet/statesinformer"
 	koordletutil "github.com/koordinator-sh/koordinator/pkg/koordlet/util"
+	"github.com/koordinator-sh/koordinator/pkg/koordlet/util/system"
 	"github.com/koordinator-sh/koordinator/pkg/util"
 )
 
@@ -35,6 +38,12 @@ type ContainerMeta struct {
 	ID   string // docker://xxx; containerd://
 	// is sandbox container
 	Sandbox bool
+}
+
+func (c *ContainerMeta) FromNri(container *api.Container, podAnnotations map[string]string) {
+	c.Name = container.GetName()
+	uid := container.GetId()
+	c.ID = getContainerID(podAnnotations, uid)
 }
 
 func (c *ContainerMeta) FromProxy(containerMeta *runtimeapi.ContainerMetadata, podAnnotations map[string]string) {
@@ -50,7 +59,47 @@ type ContainerRequest struct {
 	PodAnnotations    map[string]string
 	CgroupParent      string
 	ContainerEnvs     map[string]string
+	Resources         *Resources // TODO: support proxy & nri mode
 	ExtendedResources *apiext.ExtendedResourceContainerSpec
+}
+
+func splitEnvVar(s string) (string, string) {
+	split := strings.SplitN(s, "=", 2)
+	if len(split) < 1 {
+		return "", ""
+	}
+	if len(split) != 2 {
+		return split[0], ""
+	}
+	return split[0], split[1]
+}
+
+func (c *ContainerRequest) FromNri(pod *api.PodSandbox, container *api.Container) {
+	c.PodMeta.FromNri(pod)
+	c.ContainerMeta.FromNri(container, pod.GetAnnotations())
+	c.PodLabels = pod.GetLabels()
+	c.PodAnnotations = pod.GetAnnotations()
+	c.CgroupParent, _ = koordletutil.GetContainerCgroupParentDirByID(pod.Linux.CgroupParent, c.ContainerMeta.ID)
+
+	envs := make(map[string]string)
+	for _, e := range container.GetEnv() {
+		k, v := splitEnvVar(e)
+		if k != "" && v != "" {
+			envs[k] = v
+		}
+	}
+	c.ContainerEnvs = envs
+
+	spec, err := apiext.GetExtendedResourceSpec(pod.GetAnnotations())
+	if err != nil {
+		klog.V(4).Infof("failed to get ExtendedResourceSpec from nri via annotation, container %s/%s, err: %s",
+			c.PodMeta.Namespace, c.PodMeta.Name, c.ContainerMeta.Name, err)
+	}
+	if spec != nil && spec.Containers != nil {
+		if containerSpec, ok := spec.Containers[c.ContainerMeta.Name]; ok {
+			c.ExtendedResources = &containerSpec
+		}
+	}
 }
 
 func (c *ContainerRequest) FromProxy(req *runtimeapi.ContainerResourceHookRequest) {
@@ -80,11 +129,11 @@ func (c *ContainerRequest) FromReconciler(podMeta *statesinformer.PodMeta, conta
 	if sandbox {
 		var err error
 		if c.ContainerMeta.ID, err = koordletutil.GetPodSandboxContainerID(podMeta.Pod); err != nil {
-			klog.V(4).Infof("cannot get sandbox container id for pod %v, %v",
-				util.GetPodKey(podMeta.Pod), err)
+			klog.V(4).Infof("failed to get sandbox container ID for pod %s, err: %s",
+				podMeta.Key(), err)
 			return
 		} else if c.ContainerMeta.ID == "" {
-			klog.V(4).Infof("container status is empty for pod %v, skip")
+			klog.V(4).Infof("container ID is empty for pod %s, pod may not start, skip", podMeta.Key())
 			return
 		}
 	} else {
@@ -96,7 +145,8 @@ func (c *ContainerRequest) FromReconciler(podMeta *statesinformer.PodMeta, conta
 		}
 	}
 	var specFromContainer *apiext.ExtendedResourceContainerSpec
-	for _, containerSpec := range podMeta.Pod.Spec.Containers {
+	for i := range podMeta.Pod.Spec.Containers {
+		containerSpec := podMeta.Pod.Spec.Containers[i]
 		if containerSpec.Name == containerName {
 			if c.ContainerEnvs == nil {
 				c.ContainerEnvs = map[string]string{}
@@ -105,6 +155,8 @@ func (c *ContainerRequest) FromReconciler(podMeta *statesinformer.PodMeta, conta
 				c.ContainerEnvs[envVar.Name] = envVar.Value
 			}
 			specFromContainer = util.GetContainerExtendedResources(&containerSpec)
+			c.Resources = &Resources{}
+			c.Resources.FromContainer(&containerSpec)
 			break
 		}
 	}
@@ -162,32 +214,95 @@ type ContainerContext struct {
 	Request  ContainerRequest
 	Response ContainerResponse
 	executor resourceexecutor.ResourceUpdateExecutor
+	updaters []resourceexecutor.ResourceUpdater
+}
+
+func (c *ContainerContext) FromNri(pod *api.PodSandbox, container *api.Container) {
+	c.Request.FromNri(pod, container)
 }
 
 func (c *ContainerContext) FromProxy(req *runtimeapi.ContainerResourceHookRequest) {
 	c.Request.FromProxy(req)
 }
 
-func (c *ContainerContext) ProxyDone(resp *runtimeapi.ContainerResourceHookResponse) {
+func (c *ContainerContext) ProxyDone(resp *runtimeapi.ContainerResourceHookResponse, executor resourceexecutor.ResourceUpdateExecutor) {
+	if c.executor == nil {
+		c.executor = executor
+	}
 	c.injectForExt()
 	c.Response.ProxyDone(resp)
+	c.Update()
+}
+
+func (c *ContainerContext) NriDone(executor resourceexecutor.ResourceUpdateExecutor) (*api.ContainerAdjustment, *api.ContainerUpdate, error) {
+	if c.executor == nil {
+		c.executor = executor
+	}
+	c.injectForExt()
+	adjust := &api.ContainerAdjustment{}
+	update := &api.ContainerUpdate{}
+	// todo: add more fields conversions
+	if c.Response.Resources.CPUSet != nil {
+		adjust.SetLinuxCPUSetCPUs(*c.Response.Resources.CPUSet)
+		update.SetLinuxCPUSetCPUs(*c.Response.Resources.CPUSet)
+	}
+
+	if c.Response.Resources.CFSQuota != nil {
+		adjust.SetLinuxCPUQuota(*c.Response.Resources.CFSQuota)
+		update.SetLinuxCPUQuota(*c.Response.Resources.CFSQuota)
+	}
+
+	if c.Response.Resources.CPUShares != nil {
+		adjust.SetLinuxCPUShares(uint64(*c.Response.Resources.CPUShares))
+		update.SetLinuxCPUShares(uint64(*c.Response.Resources.CPUShares))
+	}
+
+	if c.Response.Resources.MemoryLimit != nil {
+		adjust.SetLinuxMemoryLimit(*c.Response.Resources.MemoryLimit)
+		update.SetLinuxMemoryLimit(*c.Response.Resources.MemoryLimit)
+	}
+
+	if c.Response.AddContainerEnvs != nil {
+		for k, v := range c.Response.AddContainerEnvs {
+			adjust.AddEnv(k, v)
+		}
+	}
+
+	c.Update()
+
+	return adjust, update, nil
 }
 
 func (c *ContainerContext) FromReconciler(podMeta *statesinformer.PodMeta, containerName string, sandbox bool) {
 	c.Request.FromReconciler(podMeta, containerName, sandbox)
 }
 
-func (c *ContainerContext) ReconcilerDone(executor resourceexecutor.ResourceUpdateExecutor) {
+// ReconcilerProcess generate the resource updaters but not do the update until the Update() is called.
+func (c *ContainerContext) ReconcilerProcess(executor resourceexecutor.ResourceUpdateExecutor) {
+	if c.executor == nil {
+		c.executor = executor
+	}
 	if len(c.Request.CgroupParent) == 0 {
 		klog.V(4).Infof("container cgroup parent is empty, skip reconciler for %v/%v",
 			c.Request.PodMeta.String(), c.Request.ContainerMeta.Name)
 		return
 	}
-	if c.executor == nil {
-		c.executor = executor
-	}
 	c.injectForExt()
 	c.injectForOrigin()
+}
+
+func (c *ContainerContext) ReconcilerDone(executor resourceexecutor.ResourceUpdateExecutor) {
+	c.ReconcilerProcess(executor)
+	c.Update()
+}
+
+func (c *ContainerContext) GetUpdaters() []resourceexecutor.ResourceUpdater {
+	return c.updaters
+}
+
+func (c *ContainerContext) Update() {
+	c.executor.UpdateBatch(true, c.updaters...)
+	c.updaters = nil
 }
 
 // Inject valid parameters in ContainerContext.Response.Resources,
@@ -197,28 +312,26 @@ func (c *ContainerContext) injectForOrigin() {
 	if c.Response.Resources.CPUShares != nil {
 		eventHelper := audit.V(3).Container(c.Request.ContainerMeta.ID).Reason("runtime-hooks").Message(
 			"set container cpu share to %v", *c.Response.Resources.CPUShares)
-		if err := injectCPUShares(c.Request.CgroupParent, *c.Response.Resources.CPUShares, eventHelper, c.executor); err != nil {
+		updater, err := injectCPUShares(c.Request.CgroupParent, *c.Response.Resources.CPUShares, eventHelper, c.executor)
+		if err != nil {
 			klog.Infof("set container %v/%v/%v cpu share %v on cgroup parent %v failed, error %v", c.Request.PodMeta.Namespace,
 				c.Request.PodMeta.Name, c.Request.ContainerMeta.Name, *c.Response.Resources.CPUShares, c.Request.CgroupParent, err)
 		} else {
+			c.updaters = append(c.updaters, updater)
 			klog.V(5).Infof("set container %v/%v/%v cpu share %v on cgroup parent %v",
 				c.Request.PodMeta.Namespace, c.Request.PodMeta.Name, c.Request.ContainerMeta.Name,
 				*c.Response.Resources.CPUShares, c.Request.CgroupParent)
-			audit.V(2).Container(c.Request.ContainerMeta.ID).Reason("runtime-hooks").Message(
-				"set container cpu share to %v", *c.Response.Resources.CPUShares).Do()
 		}
 	}
 	// If CPUSet is not nil and is not an empty string, set container cpuset
 	if c.Response.Resources.CPUSet != nil && *c.Response.Resources.CPUSet != "" {
 		eventHelper := audit.V(3).Container(c.Request.ContainerMeta.ID).Reason("runtime-hooks").Message("set container cpuset to %v", *c.Response.Resources.CPUSet)
-		err := injectCPUSet(c.Request.CgroupParent, *c.Response.Resources.CPUSet, eventHelper, c.executor)
-		if err != nil && resourceexecutor.IsCgroupDirErr(err) {
-			klog.V(5).Infof("set container %v/%v/%v cpuset %v on cgroup parent %v failed, error %v", c.Request.PodMeta.Namespace,
-				c.Request.PodMeta.Name, c.Request.ContainerMeta.Name, *c.Response.Resources.CPUSet, c.Request.CgroupParent, err)
-		} else if err != nil {
+		updater, err := injectCPUSet(c.Request.CgroupParent, *c.Response.Resources.CPUSet, eventHelper, c.executor)
+		if err != nil {
 			klog.Infof("set container %v/%v/%v cpuset %v on cgroup parent %v failed, error %v", c.Request.PodMeta.Namespace,
 				c.Request.PodMeta.Name, c.Request.ContainerMeta.Name, *c.Response.Resources.CPUSet, c.Request.CgroupParent, err)
 		} else {
+			c.updaters = append(c.updaters, updater)
 			klog.V(5).Infof("set container %v/%v/%v cpuset %v on cgroup parent %v",
 				c.Request.PodMeta.Namespace, c.Request.PodMeta.Name, c.Request.ContainerMeta.Name,
 				*c.Response.Resources.CPUSet, c.Request.CgroupParent)
@@ -228,10 +341,12 @@ func (c *ContainerContext) injectForOrigin() {
 	if c.Response.Resources.CFSQuota != nil {
 		eventHelper := audit.V(3).Container(c.Request.ContainerMeta.ID).Reason("runtime-hooks").Message(
 			"set container cfs quota to %v", *c.Response.Resources.CFSQuota)
-		if err := injectCPUQuota(c.Request.CgroupParent, *c.Response.Resources.CFSQuota, eventHelper, c.executor); err != nil {
+		updater, err := injectCPUQuota(c.Request.CgroupParent, *c.Response.Resources.CFSQuota, eventHelper, c.executor)
+		if err != nil {
 			klog.Infof("set container %v/%v/%v cfs quota %v on cgroup parent %v failed, error %v", c.Request.PodMeta.Namespace,
 				c.Request.PodMeta.Name, c.Request.ContainerMeta.Name, *c.Response.Resources.CFSQuota, c.Request.CgroupParent, err)
 		} else {
+			c.updaters = append(c.updaters, updater)
 			klog.V(5).Infof("set container %v/%v/%v cfs quota %v on cgroup parent %v",
 				c.Request.PodMeta.Namespace, c.Request.PodMeta.Name, c.Request.ContainerMeta.Name,
 				*c.Response.Resources.CFSQuota, c.Request.CgroupParent)
@@ -241,10 +356,12 @@ func (c *ContainerContext) injectForOrigin() {
 	if c.Response.Resources.MemoryLimit != nil {
 		eventHelper := audit.V(3).Container(c.Request.ContainerMeta.ID).Reason("runtime-hooks").Message(
 			"set container memory limit to %v", *c.Response.Resources.MemoryLimit)
-		if err := injectMemoryLimit(c.Request.CgroupParent, *c.Response.Resources.MemoryLimit, eventHelper, c.executor); err != nil {
+		updater, err := injectMemoryLimit(c.Request.CgroupParent, *c.Response.Resources.MemoryLimit, eventHelper, c.executor)
+		if err != nil {
 			klog.Infof("set container %v/%v/%v memory limit %v on cgroup parent %v failed, error %v", c.Request.PodMeta.Namespace,
 				c.Request.PodMeta.Name, c.Request.ContainerMeta.Name, *c.Response.Resources.MemoryLimit, c.Request.CgroupParent, err)
 		} else {
+			c.updaters = append(c.updaters, updater)
 			klog.V(5).Infof("set container %v/%v/%v memory limit %v on cgroup parent %v",
 				c.Request.PodMeta.Namespace, c.Request.PodMeta.Name, c.Request.ContainerMeta.Name,
 				*c.Response.Resources.MemoryLimit, c.Request.CgroupParent)
@@ -258,10 +375,10 @@ func (c *ContainerContext) injectForExt() {
 }
 
 func getContainerID(podAnnotations map[string]string, containerUID string) string {
-	// TODO parse from runtime hook request directly
-	runtimeType := "containerd"
+	// TODO parse from runtime hook request directly such as cgroup path format
+	runtimeType := system.Conf.DefaultRuntimeType
 	if _, exist := podAnnotations["io.kubernetes.docker.type"]; exist {
-		runtimeType = "docker"
+		runtimeType = system.RuntimeTypeDocker
 	}
 	return fmt.Sprintf("%s://%s", runtimeType, containerUID)
 }

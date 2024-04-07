@@ -22,7 +22,6 @@ import (
 	schedconfig "k8s.io/kubernetes/pkg/scheduler/apis/config"
 
 	"github.com/koordinator-sh/koordinator/apis/extension"
-	slov1alpha1 "github.com/koordinator-sh/koordinator/apis/slo/v1alpha1"
 )
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -32,6 +31,7 @@ type LoadAwareSchedulingArgs struct {
 	metav1.TypeMeta
 
 	// FilterExpiredNodeMetrics indicates whether to filter nodes where koordlet fails to update NodeMetric.
+	// Deprecated: NodeMetric should always be checked for expiration.
 	FilterExpiredNodeMetrics *bool
 	// NodeMetricExpirationSeconds indicates the NodeMetric expiration in seconds.
 	// When NodeMetrics expired, the node is considered abnormal.
@@ -62,14 +62,14 @@ type LoadAwareSchedulingAggregatedArgs struct {
 	UsageThresholds map[corev1.ResourceName]int64
 	// UsageAggregationType indicates the percentile type of the machine's utilization when filtering
 	// If enabled, only one of the slov1alpha1.AggregationType definitions can be used.
-	UsageAggregationType slov1alpha1.AggregationType
+	UsageAggregationType extension.AggregationType
 	// UsageAggregatedDuration indicates the statistical period of the percentile of the machine's utilization when filtering
 	// If no specific period is set, the maximum period recorded by NodeMetrics will be used by default.
 	UsageAggregatedDuration metav1.Duration
 
 	// ScoreAggregationType indicates the percentile type of the machine's utilization when scoring
 	// If enabled, only one of the slov1alpha1.AggregationType definitions can be used.
-	ScoreAggregationType slov1alpha1.AggregationType
+	ScoreAggregationType extension.AggregationType
 	// ScoreAggregatedDuration indicates the statistical period of the percentile of Prod Pod's utilization when scoring
 	// If no specific period is set, the maximum period recorded by NodeMetrics will be used by default.
 	ScoreAggregatedDuration metav1.Duration
@@ -103,8 +103,14 @@ type ScoringStrategy struct {
 type NodeNUMAResourceArgs struct {
 	metav1.TypeMeta
 
+	// DefaultCPUBindPolicy represents the default CPU bind policy.
+	// If it is empty and the Pod does not declare a binding policy,
+	// the core will not be bound to the LSE/LSR type Pod.
 	DefaultCPUBindPolicy CPUBindPolicy
-	ScoringStrategy      *ScoringStrategy
+	// ScoringStrategy is used to configure the scoring strategy of the Node-level.
+	ScoringStrategy *ScoringStrategy
+	// NUMAScoringStrategy is used to configure the scoring strategy of the NUMANode-level
+	NUMAScoringStrategy *ScoringStrategy
 }
 
 // CPUBindPolicy defines the CPU binding policy
@@ -132,7 +138,7 @@ const (
 	CPUExclusivePolicyNUMANodeLevel CPUExclusivePolicy = extension.CPUExclusivePolicyNUMANodeLevel
 )
 
-// NUMAAllocateStrategy indicates how to choose satisfied NUMA Nodes
+// NUMAAllocateStrategy indicates how to choose satisfied NUMA Nodes during binding CPUs
 type NUMAAllocateStrategy = extension.NUMAAllocateStrategy
 
 const (
@@ -151,7 +157,7 @@ type ReservationArgs struct {
 	metav1.TypeMeta
 
 	// EnablePreemption indicates whether to enable preemption for reservations.
-	EnablePreemption *bool
+	EnablePreemption bool
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -161,10 +167,10 @@ type ElasticQuotaArgs struct {
 	metav1.TypeMeta
 
 	// DelayEvictTime is the duration to handle the jitter of used and runtime
-	DelayEvictTime *metav1.Duration
+	DelayEvictTime metav1.Duration
 
 	// RevokePodInterval is the interval to check quotaGroup's used and runtime
-	RevokePodInterval *metav1.Duration
+	RevokePodInterval metav1.Duration
 
 	// DefaultQuotaGroupMax limit the maxQuota of DefaultQuotaGroup
 	DefaultQuotaGroupMax corev1.ResourceList
@@ -176,10 +182,13 @@ type ElasticQuotaArgs struct {
 	QuotaGroupNamespace string
 
 	// MonitorAllQuotas monitor the quotaGroups' used and runtime Quota to revoke pods
-	MonitorAllQuotas *bool
+	MonitorAllQuotas bool
 
 	// EnableCheckParentQuota check parentQuotaGroups' used and runtime Quota in PreFilter
-	EnableCheckParentQuota *bool
+	EnableCheckParentQuota bool
+
+	// EnableRuntimeQuota if true, use max instead of runtime for all checks.
+	EnableRuntimeQuota bool
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -190,10 +199,10 @@ type CoschedulingArgs struct {
 
 	// DefaultTimeout is the default gang's waiting time in Permit stage
 	// default is 600 seconds
-	DefaultTimeout *metav1.Duration
+	DefaultTimeout metav1.Duration
 	// Workers number of controller
 	// default is 1
-	ControllerWorkers *int64
+	ControllerWorkers int64
 	// Skip check schedule cycle
 	// default is false
 	SkipCheckScheduleCycle bool
@@ -206,5 +215,8 @@ type DeviceShareArgs struct {
 	metav1.TypeMeta
 
 	// Allocator indicates the expected allocator to use
+	// Deprecated: Adapting to different allocators is no longer supported.
 	Allocator string
+	// ScoringStrategy selects the device resource scoring strategy.
+	ScoringStrategy *ScoringStrategy
 }

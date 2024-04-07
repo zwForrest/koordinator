@@ -42,7 +42,6 @@ import (
 
 const (
 	Name                                    = "LoadAwareScheduling"
-	ErrReasonNodeMetricExpired              = "node(s) nodeMetric expired"
 	ErrReasonUsageExceedThreshold           = "node(s) %s usage exceed threshold"
 	ErrReasonAggregatedUsageExceedThreshold = "node(s) %s aggregated usage exceed threshold"
 	ErrReasonFailedEstimatePod
@@ -142,14 +141,13 @@ func (p *Plugin) Filter(ctx context.Context, state *framework.CycleState, pod *c
 		return framework.NewStatus(framework.Error, err.Error())
 	}
 
-	if p.args.FilterExpiredNodeMetrics != nil && *p.args.FilterExpiredNodeMetrics && p.args.NodeMetricExpirationSeconds != nil {
-		if isNodeMetricExpired(nodeMetric, *p.args.NodeMetricExpirationSeconds) {
-			return framework.NewStatus(framework.Unschedulable, ErrReasonNodeMetricExpired)
-		}
+	if p.args.FilterExpiredNodeMetrics != nil && *p.args.FilterExpiredNodeMetrics &&
+		p.args.NodeMetricExpirationSeconds != nil && isNodeMetricExpired(nodeMetric, *p.args.NodeMetricExpirationSeconds) {
+		return nil
 	}
 
 	filterProfile := generateUsageThresholdsFilterProfile(node, p.args)
-	if len(filterProfile.ProdUsageThresholds) > 0 && extension.GetPriorityClass(pod) == extension.PriorityProd {
+	if len(filterProfile.ProdUsageThresholds) > 0 && extension.GetPodPriorityClassWithDefault(pod) == extension.PriorityProd {
 		status := p.filterProdUsage(node, nodeMetric, filterProfile.ProdUsageThresholds)
 		if !status.IsSuccess() {
 			return status
@@ -290,7 +288,7 @@ func (p *Plugin) Score(ctx context.Context, state *framework.CycleState, pod *co
 		return 0, nil
 	}
 
-	prodPod := extension.GetPriorityClass(pod) == extension.PriorityProd && p.args.ScoreAccordingProdUsage
+	prodPod := extension.GetPodPriorityClassWithDefault(pod) == extension.PriorityProd && p.args.ScoreAccordingProdUsage
 	podMetrics := buildPodMetricMap(p.podLister, nodeMetric, prodPod)
 
 	estimatedUsed, err := p.estimator.EstimatePod(pod)
@@ -348,7 +346,7 @@ func (p *Plugin) estimatedAssignedPodUsed(nodeName string, nodeMetric *slov1alph
 	p.podAssignCache.lock.RLock()
 	defer p.podAssignCache.lock.RUnlock()
 	for _, assignInfo := range p.podAssignCache.podInfoItems[nodeName] {
-		if filterProdPod && extension.GetPriorityClass(assignInfo.pod) != extension.PriorityProd {
+		if filterProdPod && extension.GetPodPriorityClassWithDefault(assignInfo.pod) != extension.PriorityProd {
 			continue
 		}
 		podName := getPodNamespacedName(assignInfo.pod.Namespace, assignInfo.pod.Name)

@@ -26,20 +26,24 @@ import (
 	"k8s.io/klog/v2"
 	"k8s.io/utils/pointer"
 
-	ext "github.com/koordinator-sh/koordinator/apis/extension"
+	"github.com/koordinator-sh/koordinator/apis/extension"
+	"github.com/koordinator-sh/koordinator/pkg/features"
 	"github.com/koordinator-sh/koordinator/pkg/koordlet/runtimehooks/protocol"
 	"github.com/koordinator-sh/koordinator/pkg/koordlet/statesinformer"
-	"github.com/koordinator-sh/koordinator/pkg/koordlet/util"
+	koordletutil "github.com/koordinator-sh/koordinator/pkg/koordlet/util"
+	"github.com/koordinator-sh/koordinator/pkg/util"
 	"github.com/koordinator-sh/koordinator/pkg/util/cpuset"
 )
 
 type cpusetRule struct {
-	kubeletPolicy   ext.KubeletCPUManagerPolicy
-	sharePools      []ext.CPUSharedPool
+	kubeletPolicy   extension.KubeletCPUManagerPolicy
+	sharePools      []extension.CPUSharedPool
+	beSharePools    []extension.CPUSharedPool
 	systemQOSCPUSet string
 }
 
 func (r *cpusetRule) getContainerCPUSet(containerReq *protocol.ContainerRequest) (*string, error) {
+	// pod specifies QoS=BE and share pool id in annotations, use part be cpu share pool if BECPUManager enabled
 	// pod specifies share pool id in annotations, use part cpu share pool
 	// pod specifies QoS=SYSTEM in labels, use system qos resource if rule exist
 	// pod specifies QoS=LS in labels, use all share pool
@@ -51,24 +55,59 @@ func (r *cpusetRule) getContainerCPUSet(containerReq *protocol.ContainerRequest)
 	}
 	podAnnotations := containerReq.PodAnnotations
 	podLabels := containerReq.PodLabels
-	podAlloc, err := ext.GetResourceStatus(podAnnotations)
+	podAlloc, err := extension.GetResourceStatus(podAnnotations)
 	if err != nil {
 		return nil, err
 	}
 
-	if len(podAlloc.CPUSharedPools) != 0 {
-		// LS pods which have specified cpu share pool
-		cpusetList := make([]string, 0, len(podAlloc.CPUSharedPools))
-		for _, specifiedSharePool := range podAlloc.CPUSharedPools {
-			for _, nodeSharePool := range r.sharePools {
-				if specifiedSharePool.Socket == nodeSharePool.Socket && specifiedSharePool.Node == nodeSharePool.Node {
-					cpusetList = append(cpusetList, nodeSharePool.CPUSet)
+	podQOSClass := extension.GetQoSClassByAttrs(podLabels, podAnnotations)
+
+	// check if numa-aware
+	isNUMAAware := false
+	for _, numaNode := range podAlloc.NUMANodeResources {
+		if numaNode.Resources == nil {
+			continue
+		}
+		// check if cpu resource is allocated in numa-level since there can be numa allocation without cpu
+		if !numaNode.Resources.Cpu().IsZero() ||
+			util.GetBatchMilliCPUFromResourceList(numaNode.Resources) > 0 {
+			isNUMAAware = true
+			break
+		}
+	}
+	if isNUMAAware {
+		getCPUFromSharePoolByAllocFn := func(sharePools []extension.CPUSharedPool, alloc *extension.ResourceStatus) string {
+			cpusetList := make([]string, 0, len(alloc.NUMANodeResources))
+			for _, numaNode := range alloc.NUMANodeResources {
+				for _, nodeSharePool := range sharePools {
+					if numaNode.Node == nodeSharePool.Node {
+						cpusetList = append(cpusetList, nodeSharePool.CPUSet)
+					}
 				}
 			}
+			return strings.Join(cpusetList, ",")
 		}
-		klog.V(6).Infof("get cpuset from specified cpushare pool for container %v/%v",
+		if podQOSClass == extension.QoSBE && features.DefaultKoordletFeatureGate.Enabled(features.BECPUManager) {
+			// BE pods which have specified cpu share pool
+			cpuSetStr := getCPUFromSharePoolByAllocFn(r.beSharePools, podAlloc)
+			klog.V(6).Infof("get cpuset from specified be cpushare pool for container %v/%v",
+				containerReq.PodMeta.String(), containerReq.ContainerMeta.Name)
+			return pointer.String(cpuSetStr), nil
+		} else if podQOSClass != extension.QoSBE {
+			// LS pods which have specified cpu share pool
+			cpuSetStr := getCPUFromSharePoolByAllocFn(r.sharePools, podAlloc)
+			klog.V(6).Infof("get cpuset from specified cpushare pool for container %v/%v",
+				containerReq.PodMeta.String(), containerReq.ContainerMeta.Name)
+			return pointer.String(cpuSetStr), nil
+		}
+	}
+
+	// SYSTEM QoS cpuset
+	// TBD: support numa-aware
+	if podQOSClass == extension.QoSSystem && len(r.systemQOSCPUSet) > 0 {
+		klog.V(6).Infof("get cpuset from system qos rule for container %s/%s",
 			containerReq.PodMeta.String(), containerReq.ContainerMeta.Name)
-		return pointer.String(strings.Join(cpusetList, ",")), nil
+		return pointer.String(r.systemQOSCPUSet), nil
 	}
 
 	allSharePoolCPUs := make([]string, 0, len(r.sharePools))
@@ -76,19 +115,14 @@ func (r *cpusetRule) getContainerCPUSet(containerReq *protocol.ContainerRequest)
 		allSharePoolCPUs = append(allSharePoolCPUs, nodeSharePool.CPUSet)
 	}
 
-	podQOSClass := ext.GetQoSClassByAttrs(podLabels, podAnnotations)
-	if podQOSClass == ext.QoSSystem && len(r.systemQOSCPUSet) > 0 {
-		klog.V(6).Infof("get cpuset from system qos rule for container %v/%v",
-			containerReq.PodMeta.String(), containerReq.ContainerMeta.Name)
-		return pointer.String(r.systemQOSCPUSet), nil
-	} else if podQOSClass == ext.QoSLS {
+	if podQOSClass == extension.QoSLS {
 		// LS pods use all share pool
 		klog.V(6).Infof("get cpuset from all share pool for container %v/%v",
 			containerReq.PodMeta.String(), containerReq.ContainerMeta.Name)
 		return pointer.String(strings.Join(allSharePoolCPUs, ",")), nil
 	}
 
-	kubeQOS := util.GetKubeQoSByCgroupParent(containerReq.CgroupParent)
+	kubeQOS := koordletutil.GetKubeQoSByCgroupParent(containerReq.CgroupParent)
 	if kubeQOS == corev1.PodQOSBestEffort {
 		// besteffort pods including QoS=BE, clear cpuset of BE container to avoid conflict with kubelet static policy,
 		// which will pass cpuset in StartContainerRequest of CRI
@@ -98,7 +132,7 @@ func (r *cpusetRule) getContainerCPUSet(containerReq *protocol.ContainerRequest)
 		return pointer.String(""), nil
 	}
 
-	if r.kubeletPolicy.Policy == ext.KubeletCPUManagerPolicyStatic {
+	if r.kubeletPolicy.Policy == extension.KubeletCPUManagerPolicyStatic {
 		klog.V(6).Infof("get empty cpuset if kubelet is static policy for container %v/%v",
 			containerReq.PodMeta.String(), containerReq.ContainerMeta.Name)
 		return nil, nil
@@ -110,23 +144,42 @@ func (r *cpusetRule) getContainerCPUSet(containerReq *protocol.ContainerRequest)
 	}
 }
 
+func (r *cpusetRule) getHostAppCpuset(hostAppReq *protocol.HostAppRequest) (*string, error) {
+	if hostAppReq == nil {
+		return nil, nil
+	}
+	if hostAppReq.QOSClass != extension.QoSLS {
+		return nil, fmt.Errorf("only LS is supported for host application %v", hostAppReq.Name)
+	}
+	allSharePoolCPUs := make([]string, 0, len(r.sharePools))
+	for _, nodeSharePool := range r.sharePools {
+		allSharePoolCPUs = append(allSharePoolCPUs, nodeSharePool.CPUSet)
+	}
+	klog.V(6).Infof("get cpuset from all share pool for host application %v", hostAppReq.Name)
+	return pointer.String(strings.Join(allSharePoolCPUs, ",")), nil
+}
+
 func (p *cpusetPlugin) parseRule(nodeTopoIf interface{}) (bool, error) {
 	nodeTopo, ok := nodeTopoIf.(*topov1alpha1.NodeResourceTopology)
 	if !ok {
 		return false, fmt.Errorf("parse format for hook plugin %v failed, expect: %v, got: %T",
 			name, "*topov1alpha1.NodeResourceTopology", nodeTopoIf)
 	}
-	cpuSharePools, err := ext.GetNodeCPUSharePools(nodeTopo.Annotations)
+	cpuSharePools, err := extension.GetNodeCPUSharePools(nodeTopo.Annotations)
 	if err != nil {
 		return false, err
 	}
-	cpuManagerPolicy, err := ext.GetKubeletCPUManagerPolicy(nodeTopo.Annotations)
+	beCPUSharePools, err := extension.GetNodeBECPUSharePools(nodeTopo.Annotations)
+	if err != nil {
+		return false, err
+	}
+	cpuManagerPolicy, err := extension.GetKubeletCPUManagerPolicy(nodeTopo.Annotations)
 	if err != nil {
 		return false, err
 	}
 
 	systemQOSCPUSet := ""
-	systemQOSRes, err := ext.GetSystemQOSResource(nodeTopo.Annotations)
+	systemQOSRes, err := extension.GetSystemQOSResource(nodeTopo.Annotations)
 	if err != nil {
 		return false, err
 	} else if systemQOSRes != nil {
@@ -141,14 +194,19 @@ func (p *cpusetPlugin) parseRule(nodeTopoIf interface{}) (bool, error) {
 	newRule := &cpusetRule{
 		kubeletPolicy:   *cpuManagerPolicy,
 		sharePools:      cpuSharePools,
+		beSharePools:    beCPUSharePools,
 		systemQOSCPUSet: systemQOSCPUSet,
 	}
 	updated := p.updateRule(newRule)
 	return updated, nil
 }
 
-func (p *cpusetPlugin) ruleUpdateCb(pods []*statesinformer.PodMeta) error {
-	for _, podMeta := range pods {
+func (p *cpusetPlugin) ruleUpdateCb(target *statesinformer.CallbackTarget) error {
+	if target == nil {
+		klog.Warningf("callback target is nil")
+		return nil
+	}
+	for _, podMeta := range target.Pods {
 		for _, containerStat := range podMeta.Pod.Status.ContainerStatuses {
 			containerCtx := &protocol.ContainerContext{}
 			containerCtx.FromReconciler(podMeta, containerStat.Name, false)
@@ -169,6 +227,15 @@ func (p *cpusetPlugin) ruleUpdateCb(pods []*statesinformer.PodMeta) error {
 		sandboxContainerCtx.ReconcilerDone(p.executor)
 		klog.V(5).Infof("set cpuset finished pod sandbox %v/%v",
 			sandboxContainerCtx.Request.PodMeta.String(), sandboxContainerCtx.Request.ContainerMeta.ID)
+	}
+	for _, hostApp := range target.HostApplications {
+		hostCtx := protocol.HooksProtocolBuilder.HostApp(&hostApp)
+		if err := p.SetHostAppCPUSet(hostCtx); err != nil {
+			klog.Warningf("set host application %v cpuset value failed, error %v", hostApp.Name, err)
+		} else {
+			hostCtx.ReconcilerDone(p.executor)
+			klog.V(5).Infof("set host application %v cpuset value finished", hostApp.Name)
+		}
 	}
 	return nil
 }

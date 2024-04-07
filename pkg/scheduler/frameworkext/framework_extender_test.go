@@ -182,22 +182,6 @@ func (c fakeNodeInfoLister) NodeInfos() framework.NodeInfoLister {
 	return c
 }
 
-var _ ReservationNominator = &fakeReservationNominator{}
-
-type fakeReservationNominator struct {
-	reservation *ReservationInfo
-	err         error
-}
-
-func (f fakeReservationNominator) Name() string { return "fakeReservationNominator" }
-
-func (f fakeReservationNominator) NominateReservation(ctx context.Context, cycleState *framework.CycleState, pod *corev1.Pod, nodeName string) (*ReservationInfo, *framework.Status) {
-	if f.err != nil {
-		return nil, framework.AsStatus(f.err)
-	}
-	return f.reservation, nil
-}
-
 func Test_frameworkExtenderImpl_RunPreFilterPlugins(t *testing.T) {
 	tests := []struct {
 		name string
@@ -336,82 +320,6 @@ func Test_frameworkExtenderImpl_RunScorePlugins(t *testing.T) {
 				"BeforeScore-2": "2",
 			}
 			assert.Equal(t, expectedAnnotations, tt.pod.Annotations)
-		})
-	}
-}
-
-func TestRunReservePluginsReserve(t *testing.T) {
-	reservation := &schedulingv1alpha1.Reservation{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "fake-reservation",
-		},
-	}
-	reservationInfo := NewReservationInfo(reservation)
-	tests := []struct {
-		name            string
-		nominators      []ReservationNominator
-		wantReservation *ReservationInfo
-		wantStatus      bool
-	}{
-		{
-			name: "nominate reservation",
-			nominators: []ReservationNominator{
-				fakeReservationNominator{
-					reservation: reservationInfo,
-				},
-			},
-			wantReservation: reservationInfo,
-			wantStatus:      true,
-		},
-		{
-			name:            "no nominator",
-			wantReservation: nil,
-			wantStatus:      true,
-		},
-		{
-			name: "multi nominators",
-			nominators: []ReservationNominator{
-				fakeReservationNominator{},
-				fakeReservationNominator{
-					reservation: reservationInfo,
-				},
-			},
-			wantReservation: reservationInfo,
-			wantStatus:      true,
-		},
-		{
-			name: "error nominator",
-			nominators: []ReservationNominator{
-				fakeReservationNominator{
-					err: fmt.Errorf("fail"),
-				},
-			},
-			wantStatus: false,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			registeredPlugins := []schedulertesting.RegisterPluginFunc{
-				schedulertesting.RegisterBindPlugin(defaultbinder.Name, defaultbinder.New),
-				schedulertesting.RegisterQueueSortPlugin(queuesort.Name, queuesort.New),
-			}
-			fh, err := schedulertesting.NewFramework(
-				registeredPlugins,
-				"koord-scheduler",
-			)
-			assert.NoError(t, err)
-
-			extenderFactory, _ := NewFrameworkExtenderFactory()
-			extender := NewFrameworkExtender(extenderFactory, fh)
-			impl := extender.(*frameworkExtenderImpl)
-			for _, v := range tt.nominators {
-				impl.updatePlugins(v)
-			}
-			cycleState := framework.NewCycleState()
-			status := extender.RunReservePluginsReserve(context.TODO(), cycleState, &corev1.Pod{}, "test-node-1")
-			assert.Equal(t, tt.wantStatus, status.IsSuccess())
-			reservation := GetNominatedReservation(cycleState)
-			assert.Equal(t, tt.wantReservation, reservation)
 		})
 	}
 }
@@ -761,9 +669,11 @@ func TestReservationFilterPlugin(t *testing.T) {
 }
 
 type fakeReservationScorePlugin struct {
-	name  string
-	score int64
-	err   error
+	name   string
+	scores map[string]int64
+	err    error
+
+	enableNormalization bool
 }
 
 func (f *fakeReservationScorePlugin) Name() string { return f.name }
@@ -773,7 +683,18 @@ func (f *fakeReservationScorePlugin) ScoreReservation(ctx context.Context, cycle
 	if f.err != nil {
 		status = framework.AsStatus(f.err)
 	}
-	return f.score, status
+	return f.scores[reservationInfo.GetName()], status
+}
+
+func (f *fakeReservationScorePlugin) ReservationScoreExtensions() ReservationScoreExtensions {
+	return f
+}
+
+func (f *fakeReservationScorePlugin) NormalizeReservationScore(ctx context.Context, cycleState *framework.CycleState, pod *corev1.Pod, scores ReservationScoreList) *framework.Status {
+	if f.enableNormalization {
+		return DefaultReservationNormalizeScore(MaxReservationScore, false, scores)
+	}
+	return nil
 }
 
 func TestReservationScorePlugin(t *testing.T) {
@@ -799,8 +720,18 @@ func TestReservationScorePlugin(t *testing.T) {
 				},
 			},
 			plugins: []*fakeReservationScorePlugin{
-				{name: "pl-1", score: 1},
-				{name: "pl-2", score: 2},
+				{
+					name: "pl-1", scores: map[string]int64{
+						"test-reservation-1": 1,
+						"test-reservation-2": 1,
+					},
+				},
+				{
+					name: "pl-2", scores: map[string]int64{
+						"test-reservation-1": 2,
+						"test-reservation-2": 2,
+					},
+				},
 			},
 			wantScores: PluginToReservationScores{
 				"pl-1": {
@@ -810,6 +741,50 @@ func TestReservationScorePlugin(t *testing.T) {
 				"pl-2": {
 					{Name: "test-reservation-1", Score: 2},
 					{Name: "test-reservation-2", Score: 2},
+				},
+			},
+			wantStatus: true,
+		},
+		{
+			name: "normalize score",
+			reservations: []*schedulingv1alpha1.Reservation{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "test-reservation-1",
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "test-reservation-2",
+					},
+				},
+			},
+			plugins: []*fakeReservationScorePlugin{
+				{
+					name: "pl-1",
+					scores: map[string]int64{
+						"test-reservation-1": 100,
+						"test-reservation-2": 200,
+					},
+					enableNormalization: true,
+				},
+				{
+					name: "pl-2",
+					scores: map[string]int64{
+						"test-reservation-1": 100,
+						"test-reservation-2": 50,
+					},
+					enableNormalization: true,
+				},
+			},
+			wantScores: PluginToReservationScores{
+				"pl-1": {
+					{Name: "test-reservation-1", Score: 50},
+					{Name: "test-reservation-2", Score: 100},
+				},
+				"pl-2": {
+					{Name: "test-reservation-1", Score: 100},
+					{Name: "test-reservation-2", Score: 50},
 				},
 			},
 			wantStatus: true,

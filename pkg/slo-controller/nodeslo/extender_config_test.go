@@ -23,13 +23,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"k8s.io/utils/pointer"
 
-	"github.com/koordinator-sh/koordinator/apis/extension"
+	"github.com/koordinator-sh/koordinator/apis/configuration"
 	slov1alpha1 "github.com/koordinator-sh/koordinator/apis/slo/v1alpha1"
 )
 
 func getDefaultExtensionStrategy() *slov1alpha1.ExtensionsMap {
 	defaultCfg := getDefaultExtensionCfg()
-	defaultStrategy := slov1alpha1.ExtensionsMap{}
+	defaultStrategy := slov1alpha1.ExtensionsMap{Object: map[string]interface{}{}}
 	if defaultCfg == nil || defaultCfg.Object == nil {
 		return &defaultStrategy
 	}
@@ -102,17 +102,17 @@ func TestExtensionsCfgMap_DeepCopy(t *testing.T) {
 	type testExtStruct struct {
 		TestBoolVal *bool
 	}
-	testExtensionCfg := extension.ExtensionCfg{ClusterStrategy: testExtStruct{
+	testExtensionCfg := configuration.ExtensionCfg{ClusterStrategy: testExtStruct{
 		TestBoolVal: pointer.Bool(true),
 	}}
-	testingExtensionCfgMap := extension.ExtensionCfgMap{}
-	testingExtensionCfgMap.Object = map[string]extension.ExtensionCfg{
+	testingExtensionCfgMap := configuration.ExtensionCfgMap{}
+	testingExtensionCfgMap.Object = map[string]configuration.ExtensionCfg{
 		"test-ext-key": testExtensionCfg,
 	}
 	tests := []struct {
 		name string
-		in   extension.ExtensionCfgMap
-		want *extension.ExtensionCfgMap
+		in   configuration.ExtensionCfgMap
+		want *configuration.ExtensionCfgMap
 	}{
 		{
 			name: "deep copy struct",

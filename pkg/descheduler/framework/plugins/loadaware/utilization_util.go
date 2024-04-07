@@ -20,9 +20,11 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/klog/v2"
 
@@ -40,9 +42,8 @@ type ResourceThresholds = deschedulerconfig.ResourceThresholds
 
 type NodeUsage struct {
 	node       *corev1.Node
-	nodeMetric *slov1alpha1.NodeMetric
-	usage      map[corev1.ResourceName]*resource.Quantity
 	allPods    []*corev1.Pod
+	usage      map[corev1.ResourceName]*resource.Quantity
 	podMetrics map[types.NamespacedName]*slov1alpha1.ResourceMap
 }
 
@@ -128,7 +129,7 @@ func resourceThreshold(nodeCapacity corev1.ResourceList, resourceName corev1.Res
 	return resource.NewQuantity(resourceCapacityFraction(resourceCapacityQuantity.Value()), resourceCapacityQuantity.Format)
 }
 
-func getNodeUsage(nodes []*corev1.Node, resourceNames []corev1.ResourceName, nodeMetricLister slolisters.NodeMetricLister, getPodsAssignedToNode podutil.GetPodsAssignedToNodeFunc) map[string]*NodeUsage {
+func getNodeUsage(nodes []*corev1.Node, resourceNames []corev1.ResourceName, nodeMetricLister slolisters.NodeMetricLister, getPodsAssignedToNode podutil.GetPodsAssignedToNodeFunc, nodeMetricExpirationSeconds *int64) map[string]*NodeUsage {
 	nodeUsages := map[string]*NodeUsage{}
 	for _, v := range nodes {
 		pods, err := podutil.ListPodsOnANode(v.Name, getPodsAssignedToNode, nil)
@@ -142,15 +143,24 @@ func getNodeUsage(nodes []*corev1.Node, resourceNames []corev1.ResourceName, nod
 			klog.ErrorS(err, "Failed to get NodeMetric", "node", klog.KObj(v))
 			continue
 		}
-		// TODO(joseph): We should check if NodeMetric is expired.
-		if nodeMetric.Status.NodeMetric == nil {
+		// We should check if NodeMetric is expired.
+		if nodeMetric.Status.NodeMetric == nil || nodeMetricExpirationSeconds != nil &&
+			isNodeMetricExpired(nodeMetric.Status.UpdateTime, *nodeMetricExpirationSeconds) {
+			klog.ErrorS(err, "NodeMetric has expired", "node", klog.KObj(v), "effective period", time.Duration(*nodeMetricExpirationSeconds)*time.Second)
 			continue
 		}
 
 		usage := map[corev1.ResourceName]*resource.Quantity{}
 		for _, resourceName := range resourceNames {
-			usageQuantity, ok := nodeMetric.Status.NodeMetric.NodeUsage.ResourceList[resourceName]
-			if !ok {
+			sysUsage := nodeMetric.Status.NodeMetric.SystemUsage.ResourceList[resourceName]
+			var podUsage resource.Quantity
+			for _, podMetricInfo := range nodeMetric.Status.PodsMetric {
+				podUsage.Add(podMetricInfo.PodUsage.ResourceList[resourceName])
+			}
+			var usageQuantity resource.Quantity
+			usageQuantity.Add(sysUsage)
+			usageQuantity.Add(podUsage)
+			if usageQuantity.IsZero() {
 				switch resourceName {
 				case corev1.ResourceCPU:
 					usageQuantity = *resource.NewMilliQuantity(0, resource.DecimalSI)
@@ -171,9 +181,8 @@ func getNodeUsage(nodes []*corev1.Node, resourceNames []corev1.ResourceName, nod
 
 		nodeUsages[v.Name] = &NodeUsage{
 			node:       v,
-			nodeMetric: nodeMetric,
-			usage:      usage,
 			allPods:    pods,
+			usage:      usage,
 			podMetrics: podMetrics,
 		}
 	}
@@ -222,6 +231,7 @@ func resourceUsagePercentages(nodeUsage *NodeUsage) map[corev1.ResourceName]floa
 
 func evictPodsFromSourceNodes(
 	ctx context.Context,
+	nodePoolName string,
 	sourceNodes, destinationNodes []NodeInfo,
 	dryRun bool,
 	nodeFit bool,
@@ -256,7 +266,9 @@ func evictPodsFromSourceNodes(
 		}
 	}
 
-	var keysAndValues []interface{}
+	keysAndValues := []interface{}{
+		"nodePool", nodePoolName,
+	}
 	for resourceName, quantity := range totalAvailableUsages {
 		keysAndValues = append(keysAndValues, string(resourceName), quantity.String())
 	}
@@ -273,26 +285,21 @@ func evictPodsFromSourceNodes(
 			}),
 		)
 		klog.V(4).InfoS("Evicting pods from node",
-			"node", klog.KObj(srcNode.node), "usage", srcNode.usage,
+			"nodePool", nodePoolName, "node", klog.KObj(srcNode.node), "usage", srcNode.usage,
 			"allPods", len(srcNode.allPods), "nonRemovablePods", len(nonRemovablePods), "removablePods", len(removablePods))
 
 		if len(removablePods) == 0 {
-			klog.V(4).InfoS("No removable pods on node, try next node", "node", klog.KObj(srcNode.node))
+			klog.V(4).InfoS("No removable pods on node, try next node", "node", klog.KObj(srcNode.node), "nodePool", nodePoolName)
 			continue
 		}
-
-		sorter.SortPodsByUsage(
-			removablePods,
-			srcNode.podMetrics,
-			map[string]corev1.ResourceList{srcNode.node.Name: srcNode.node.Status.Allocatable},
-			resourceWeights,
-		)
-		evictPods(ctx, dryRun, removablePods, srcNode, totalAvailableUsages, podEvictor, podFilter, continueEviction, evictionReasonGenerator)
+		sortPodsOnOneOverloadedNode(srcNode, removablePods, resourceWeights)
+		evictPods(ctx, nodePoolName, dryRun, removablePods, srcNode, totalAvailableUsages, podEvictor, podFilter, continueEviction, evictionReasonGenerator)
 	}
 }
 
 func evictPods(
 	ctx context.Context,
+	nodePoolName string,
 	dryRun bool,
 	inputPods []*corev1.Pod,
 	nodeInfo NodeInfo,
@@ -308,25 +315,25 @@ func evictPods(
 		}
 
 		if !podFilter(pod) {
-			klog.V(4).InfoS("Pod aborted eviction because it was filtered by filters", "pod", klog.KObj(pod), "node", klog.KObj(nodeInfo.node))
+			klog.V(4).InfoS("Pod aborted eviction because it was filtered by filters", "pod", klog.KObj(pod), "node", klog.KObj(nodeInfo.node), "nodePool", nodePoolName)
 			continue
 		}
 		if dryRun {
-			klog.InfoS("Evict pod in dry run mode", "pod", klog.KObj(pod), "node", klog.KObj(nodeInfo.node))
+			klog.InfoS("Evict pod in dry run mode", "pod", klog.KObj(pod), "node", klog.KObj(nodeInfo.node), "nodePool", nodePoolName)
 		} else {
 			evictionOptions := framework.EvictOptions{
 				Reason: evictionReasonGenerator(nodeInfo),
 			}
 			if !podEvictor.Evict(ctx, pod, evictionOptions) {
-				klog.InfoS("Failed to Evict Pod", "pod", klog.KObj(pod), "node", klog.KObj(nodeInfo.node))
+				klog.InfoS("Failed to Evict Pod", "pod", klog.KObj(pod), "node", klog.KObj(nodeInfo.node), "nodePool", nodePoolName)
 				continue
 			}
-			klog.InfoS("Evicted Pod", "pod", klog.KObj(pod), "node", klog.KObj(nodeInfo.node))
+			klog.InfoS("Evicted Pod", "pod", klog.KObj(pod), "node", klog.KObj(nodeInfo.node), "nodePool", nodePoolName)
 		}
 
 		podMetric := nodeInfo.podMetrics[types.NamespacedName{Namespace: pod.Namespace, Name: pod.Name}]
 		if podMetric == nil {
-			klog.V(4).InfoS("Failed to find PodMetric", "pod", klog.KObj(pod), "node", klog.KObj(nodeInfo.node))
+			klog.V(4).InfoS("Failed to find PodMetric", "pod", klog.KObj(pod), "node", klog.KObj(nodeInfo.node), "nodePool", nodePoolName)
 			continue
 		}
 		for resourceName, availableUsage := range totalAvailableUsages {
@@ -344,9 +351,10 @@ func evictPods(
 
 		keysAndValues := []interface{}{
 			"node", nodeInfo.node.Name,
+			"nodePool", nodePoolName,
 		}
 		for k, v := range nodeInfo.usage {
-			keysAndValues = append(keysAndValues, k, v.String())
+			keysAndValues = append(keysAndValues, k.String(), v.String())
 		}
 		for resourceName, quantity := range totalAvailableUsages {
 			keysAndValues = append(keysAndValues, fmt.Sprintf("%s/totalAvailable", resourceName), quantity.String())
@@ -360,13 +368,8 @@ func evictPods(
 func sortNodesByUsage(nodes []NodeInfo, resourceToWeightMap map[corev1.ResourceName]int64, ascending bool) {
 	scorer := sorter.ResourceUsageScorer(resourceToWeightMap)
 	sort.Slice(nodes, func(i, j int) bool {
-		var iNodeUsage, jNodeUsage corev1.ResourceList
-		if nodeMetric := nodes[i].nodeMetric.Status.NodeMetric; nodeMetric != nil {
-			iNodeUsage = nodeMetric.NodeUsage.ResourceList
-		}
-		if nodeMetric := nodes[j].nodeMetric.Status.NodeMetric; nodeMetric != nil {
-			jNodeUsage = nodeMetric.NodeUsage.ResourceList
-		}
+		iNodeUsage := usageToResourceList(nodes[i].usage)
+		jNodeUsage := usageToResourceList(nodes[j].usage)
 
 		iScore := scorer(iNodeUsage, nodes[i].node.Status.Allocatable)
 		jScore := scorer(jNodeUsage, nodes[j].node.Status.Allocatable)
@@ -375,6 +378,14 @@ func sortNodesByUsage(nodes []NodeInfo, resourceToWeightMap map[corev1.ResourceN
 		}
 		return iScore > jScore
 	})
+}
+
+func usageToResourceList(usage map[corev1.ResourceName]*resource.Quantity) corev1.ResourceList {
+	m := corev1.ResourceList{}
+	for k, v := range usage {
+		m[k] = *v
+	}
+	return m
 }
 
 func isNodeOverutilized(usage, thresholds map[corev1.ResourceName]*resource.Quantity) (corev1.ResourceList, bool) {
@@ -400,6 +411,12 @@ func isNodeUnderutilized(usage, thresholds map[corev1.ResourceName]*resource.Qua
 		}
 	}
 	return true
+}
+
+func isNodeMetricExpired(lastUpdateTime *metav1.Time, nodeMetricExpirationSeconds int64) bool {
+	return lastUpdateTime == nil ||
+		nodeMetricExpirationSeconds > 0 &&
+			time.Since(lastUpdateTime.Time) >= time.Duration(nodeMetricExpirationSeconds)*time.Second
 }
 
 func getResourceNames(thresholds ResourceThresholds) []corev1.ResourceName {
@@ -448,4 +465,18 @@ func calcAverageResourceUsagePercent(nodeUsages map[string]*NodeUsage) ResourceT
 		average[resourceName] = totalPercentage / Percentage(numberOfNodes)
 	}
 	return average
+}
+func sortPodsOnOneOverloadedNode(srcNode NodeInfo, removablePods []*corev1.Pod, resourceWeights map[corev1.ResourceName]int64) {
+	weights := make(map[corev1.ResourceName]int64)
+	// get the overused resource of this node, and the weights of appropriately using resources will be zero.
+	overusedResources, _ := isNodeOverutilized(srcNode.usage, srcNode.thresholds.highResourceThreshold)
+	for or := range overusedResources {
+		weights[or] = resourceWeights[or]
+	}
+	sorter.SortPodsByUsage(
+		removablePods,
+		srcNode.podMetrics,
+		map[string]corev1.ResourceList{srcNode.node.Name: srcNode.node.Status.Allocatable},
+		weights,
+	)
 }

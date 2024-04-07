@@ -173,6 +173,24 @@ func (h *PodMutatingHandler) doMutateByColocationProfile(ctx context.Context, po
 		}
 	}
 
+	if len(profile.Spec.LabelKeysMapping) > 0 {
+		if pod.Labels == nil {
+			pod.Labels = make(map[string]string)
+		}
+		for keyOld, keyNew := range profile.Spec.LabelKeysMapping {
+			pod.Labels[keyNew] = pod.Labels[keyOld]
+		}
+	}
+
+	if len(profile.Spec.AnnotationKeysMapping) > 0 {
+		if pod.Annotations == nil {
+			pod.Annotations = make(map[string]string)
+		}
+		for keyOld, keyNew := range profile.Spec.AnnotationKeysMapping {
+			pod.Annotations[keyNew] = pod.Annotations[keyOld]
+		}
+	}
+
 	if profile.Spec.SchedulerName != "" {
 		pod.Spec.SchedulerName = profile.Spec.SchedulerName
 	}
@@ -192,6 +210,7 @@ func (h *PodMutatingHandler) doMutateByColocationProfile(ctx context.Context, po
 		}
 		pod.Spec.PriorityClassName = profile.Spec.PriorityClassName
 		pod.Spec.Priority = pointer.Int32(priorityClass.Value)
+		pod.Spec.PreemptionPolicy = priorityClass.PreemptionPolicy
 	}
 
 	if profile.Spec.KoordinatorPriority != nil {
@@ -218,7 +237,7 @@ func (h *PodMutatingHandler) doMutateByColocationProfile(ctx context.Context, po
 }
 
 func (h *PodMutatingHandler) mutatePodResourceSpec(pod *corev1.Pod) error {
-	priorityClass := extension.GetPriorityClass(pod)
+	priorityClass := extension.GetPodPriorityClassWithDefault(pod)
 	if priorityClass == extension.PriorityNone || priorityClass == extension.PriorityProd {
 		return nil
 	}

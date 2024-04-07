@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package sloconfig
 
 import (
@@ -28,7 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	ctrladmission "sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	"github.com/koordinator-sh/koordinator/apis/extension"
+	"github.com/koordinator-sh/koordinator/apis/configuration"
 	"github.com/koordinator-sh/koordinator/pkg/util/sloconfig"
 )
 
@@ -60,11 +61,11 @@ func Test_Validate(t *testing.T) {
 						Namespace: sloconfig.ConfigNameSpace,
 					},
 					Data: map[string]string{
-						extension.ColocationConfigKey: "{\"enable\":true,\"metricAggregateDurationSeconds\":60," +
+						configuration.ColocationConfigKey: "{\"enable\":true,\"metricAggregateDurationSeconds\":60," +
 							"\"cpuReclaimThresholdPercent\":70,\"memoryReclaimThresholdPercent\":80,\"updateTimeThresholdSeconds\":300," +
 							"\"degradeTimeMinutes\":5,\"resourceDiffThreshold\":0.1}",
-						extension.ResourceThresholdConfigKey: "{\"clusterStrategy\":{\"enable\":true,\"cpuSuppressThresholdPercent\":60}}",
-						extension.ResourceQOSConfigKey: `
+						configuration.ResourceThresholdConfigKey: "{\"clusterStrategy\":{\"enable\":true,\"cpuSuppressThresholdPercent\":60}}",
+						configuration.ResourceQOSConfigKey: `
 {
   "clusterStrategy": {
     "enable": true,
@@ -76,8 +77,8 @@ func Test_Validate(t *testing.T) {
   }
 }
 `,
-						extension.CPUBurstConfigKey: "{\"clusterStrategy\":{\"cfsQuotaBurstPeriodSeconds\":60}}",
-						extension.SystemConfigKey:   "{\"clusterStrategy\":{\"minFreeKbytesFactor\":150}}",
+						configuration.CPUBurstConfigKey: "{\"clusterStrategy\":{\"cfsQuotaBurstPeriodSeconds\":60}}",
+						configuration.SystemConfigKey:   "{\"clusterStrategy\":{\"minFreeKbytesFactor\":150}}",
 					},
 				},
 				nodeList: []*corev1.Node{
@@ -111,10 +112,10 @@ func Test_Validate(t *testing.T) {
 						Namespace: sloconfig.ConfigNameSpace,
 					},
 					Data: map[string]string{
-						extension.ResourceThresholdConfigKey: "invalid_content",
-						extension.ResourceQOSConfigKey:       "invalid_content",
-						extension.CPUBurstConfigKey:          "invalid_content",
-						extension.SystemConfigKey:            "invalid_content",
+						configuration.ResourceThresholdConfigKey: "invalid_content",
+						configuration.ResourceQOSConfigKey:       "invalid_content",
+						configuration.CPUBurstConfigKey:          "invalid_content",
+						configuration.SystemConfigKey:            "invalid_content",
 					},
 				},
 			},
@@ -134,8 +135,8 @@ func Test_Validate(t *testing.T) {
 						Namespace: sloconfig.ConfigNameSpace,
 					},
 					Data: map[string]string{
-						extension.ResourceThresholdConfigKey: "{\"clusterStrategy\":{\"enable\":true,\"cpuSuppressThresholdPercent\":60}}",
-						extension.ResourceQOSConfigKey: `
+						configuration.ResourceThresholdConfigKey: "{\"clusterStrategy\":{\"enable\":true,\"cpuSuppressThresholdPercent\":60}}",
+						configuration.ResourceQOSConfigKey: `
 {
   "clusterStrategy": {
     "enable": true,
@@ -147,8 +148,8 @@ func Test_Validate(t *testing.T) {
   }
 }
 `,
-						extension.CPUBurstConfigKey: "{\"clusterStrategy\":{\"cfsQuotaBurstPeriodSeconds\":60}}",
-						extension.SystemConfigKey:   "{\"clusterStrategy\":{\"minFreeKbytesFactor\":150}}",
+						configuration.CPUBurstConfigKey: "{\"clusterStrategy\":{\"cfsQuotaBurstPeriodSeconds\":60}}",
+						configuration.SystemConfigKey:   "{\"clusterStrategy\":{\"minFreeKbytesFactor\":150}}",
 					},
 				},
 			},
@@ -168,11 +169,11 @@ func Test_Validate(t *testing.T) {
 						Namespace: sloconfig.ConfigNameSpace,
 					},
 					Data: map[string]string{
-						extension.ColocationConfigKey: "{\"enable\":true,\"metricAggregateDurationSeconds\":-1," +
+						configuration.ColocationConfigKey: "{\"enable\":true,\"metricAggregateDurationSeconds\":-1," +
 							"\"cpuReclaimThresholdPercent\":70,\"memoryReclaimThresholdPercent\":80,\"updateTimeThresholdSeconds\":300," +
 							"\"degradeTimeMinutes\":5,\"resourceDiffThreshold\":0.1}",
-						extension.ResourceThresholdConfigKey: "{\"clusterStrategy\":{\"enable\":true,\"cpuSuppressThresholdPercent\":60}}",
-						extension.ResourceQOSConfigKey: `
+						configuration.ResourceThresholdConfigKey: "{\"clusterStrategy\":{\"enable\":true,\"cpuSuppressThresholdPercent\":60}}",
+						configuration.ResourceQOSConfigKey: `
 {
   "clusterStrategy": {
     "enable": true,
@@ -184,8 +185,8 @@ func Test_Validate(t *testing.T) {
   }
 }
 `,
-						extension.CPUBurstConfigKey: "{\"clusterStrategy\":{\"cfsQuotaBurstPeriodSeconds\":60}}",
-						extension.SystemConfigKey:   "{\"clusterStrategy\":{\"minFreeKbytesFactor\":150}}",
+						configuration.CPUBurstConfigKey: "{\"clusterStrategy\":{\"cfsQuotaBurstPeriodSeconds\":60}}",
+						configuration.SystemConfigKey:   "{\"clusterStrategy\":{\"minFreeKbytesFactor\":150}}",
 					},
 				},
 			},
@@ -205,11 +206,11 @@ func Test_Validate(t *testing.T) {
 						Namespace: sloconfig.ConfigNameSpace,
 					},
 					Data: map[string]string{
-						extension.ColocationConfigKey: "{\"enable\":true,\"metricAggregateDurationSeconds\":60," +
+						configuration.ColocationConfigKey: "{\"enable\":true,\"metricAggregateDurationSeconds\":60," +
 							"\"cpuReclaimThresholdPercent\":70,\"memoryReclaimThresholdPercent\":80,\"updateTimeThresholdSeconds\":300," +
 							"\"degradeTimeMinutes\":5,\"resourceDiffThreshold\":0.1}",
-						extension.ResourceThresholdConfigKey: "{\"clusterStrategy\":{\"enable\":true,\"cpuSuppressThresholdPercent\":60}}",
-						extension.ResourceQOSConfigKey: `
+						configuration.ResourceThresholdConfigKey: "{\"clusterStrategy\":{\"enable\":true,\"cpuSuppressThresholdPercent\":60}}",
+						configuration.ResourceQOSConfigKey: `
 {
   "clusterStrategy": {
     "enable": true,
@@ -221,8 +222,8 @@ func Test_Validate(t *testing.T) {
   }
 }
 `,
-						extension.CPUBurstConfigKey: "{\"clusterStrategy\":{\"cfsQuotaBurstPeriodSeconds\":60}}",
-						extension.SystemConfigKey:   "{\"clusterStrategy\":{\"minFreeKbytesFactor\":150}}",
+						configuration.CPUBurstConfigKey: "{\"clusterStrategy\":{\"cfsQuotaBurstPeriodSeconds\":60}}",
+						configuration.SystemConfigKey:   "{\"clusterStrategy\":{\"minFreeKbytesFactor\":150}}",
 					},
 				},
 				nodeList: []*corev1.Node{
@@ -256,13 +257,13 @@ func Test_Validate(t *testing.T) {
 						Namespace: sloconfig.ConfigNameSpace,
 					},
 					Data: map[string]string{
-						extension.ColocationConfigKey: "{\"enable\":true,\"metricAggregateDurationSeconds\":60," +
+						configuration.ColocationConfigKey: "{\"enable\":true,\"metricAggregateDurationSeconds\":60," +
 							"\"cpuReclaimThresholdPercent\":70,\"memoryReclaimThresholdPercent\":80,\"updateTimeThresholdSeconds\":300," +
 							"\"degradeTimeMinutes\":5,\"resourceDiffThreshold\":0.1,\"nodeConfigs\":[{\"nodeSelector\":" +
 							"{\"matchLabels\":{\"xxx\":\"xxx\"}},\"enable\":true,\"name\":\"test1\"},{\"nodeSelector\":" +
 							"{\"matchLabels\":{\"xxx\":\"xxx\",\"yyy\":\"yyy\"}},\"enable\":true,\"name\":\"test2\"}]}",
-						extension.ResourceThresholdConfigKey: "{\"clusterStrategy\":{\"enable\":true,\"cpuSuppressThresholdPercent\":60}}",
-						extension.ResourceQOSConfigKey: `
+						configuration.ResourceThresholdConfigKey: "{\"clusterStrategy\":{\"enable\":true,\"cpuSuppressThresholdPercent\":60}}",
+						configuration.ResourceQOSConfigKey: `
 {
   "clusterStrategy": {
     "enable": true,
@@ -274,8 +275,8 @@ func Test_Validate(t *testing.T) {
   }
 }
 `,
-						extension.CPUBurstConfigKey: "{\"clusterStrategy\":{\"cfsQuotaBurstPeriodSeconds\":60}}",
-						extension.SystemConfigKey:   "{\"clusterStrategy\":{\"minFreeKbytesFactor\":150}}",
+						configuration.CPUBurstConfigKey: "{\"clusterStrategy\":{\"cfsQuotaBurstPeriodSeconds\":60}}",
+						configuration.SystemConfigKey:   "{\"clusterStrategy\":{\"minFreeKbytesFactor\":150}}",
 					},
 				},
 			},
@@ -295,13 +296,13 @@ func Test_Validate(t *testing.T) {
 						Namespace: sloconfig.ConfigNameSpace,
 					},
 					Data: map[string]string{
-						extension.ColocationConfigKey: "{\"enable\":true,\"metricAggregateDurationSeconds\":60," +
+						configuration.ColocationConfigKey: "{\"enable\":true,\"metricAggregateDurationSeconds\":60," +
 							"\"cpuReclaimThresholdPercent\":70,\"memoryReclaimThresholdPercent\":80,\"updateTimeThresholdSeconds\":300," +
 							"\"degradeTimeMinutes\":5,\"resourceDiffThreshold\":0.1,\"nodeConfigs\":[{\"nodeSelector\":" +
 							"{\"matchLabels\":{\"xxx\":\"xxx\"}},\"enable\":true,\"name\":\"test1\"},{\"nodeSelector\":" +
 							"{\"matchLabels\":{\"yyy\":\"yyy\"}},\"enable\":true,\"name\":\"test2\"}]}",
-						extension.ResourceThresholdConfigKey: "{\"clusterStrategy\":{\"enable\":true,\"cpuSuppressThresholdPercent\":60}}",
-						extension.ResourceQOSConfigKey: `
+						configuration.ResourceThresholdConfigKey: "{\"clusterStrategy\":{\"enable\":true,\"cpuSuppressThresholdPercent\":60}}",
+						configuration.ResourceQOSConfigKey: `
 {
   "clusterStrategy": {
     "enable": true,
@@ -313,8 +314,8 @@ func Test_Validate(t *testing.T) {
   }
 }
 `,
-						extension.CPUBurstConfigKey: "{\"clusterStrategy\":{\"cfsQuotaBurstPeriodSeconds\":60}}",
-						extension.SystemConfigKey:   "{\"clusterStrategy\":{\"minFreeKbytesFactor\":150}}",
+						configuration.CPUBurstConfigKey: "{\"clusterStrategy\":{\"cfsQuotaBurstPeriodSeconds\":60}}",
+						configuration.SystemConfigKey:   "{\"clusterStrategy\":{\"minFreeKbytesFactor\":150}}",
 					},
 				},
 				nodeList: []*corev1.Node{
@@ -348,11 +349,11 @@ func Test_Validate(t *testing.T) {
 						Namespace: sloconfig.ConfigNameSpace,
 					},
 					Data: map[string]string{
-						extension.ColocationConfigKey: "{\"enable\":true,\"metricAggregateDurationSeconds\":60," +
+						configuration.ColocationConfigKey: "{\"enable\":true,\"metricAggregateDurationSeconds\":60," +
 							"\"cpuReclaimThresholdPercent\":70,\"memoryReclaimThresholdPercent\":80,\"updateTimeThresholdSeconds\":300," +
 							"\"degradeTimeMinutes\":5,\"resourceDiffThreshold\":0.1}",
-						extension.ResourceThresholdConfigKey: "{\"clusterStrategy\":{\"enable\":true,\"cpuSuppressThresholdPercent\":60}}",
-						extension.ResourceQOSConfigKey: `
+						configuration.ResourceThresholdConfigKey: "{\"clusterStrategy\":{\"enable\":true,\"cpuSuppressThresholdPercent\":60}}",
+						configuration.ResourceQOSConfigKey: `
 {
   "clusterStrategy": {
     "enable": true,
@@ -364,8 +365,8 @@ func Test_Validate(t *testing.T) {
   }
 }
 `,
-						extension.CPUBurstConfigKey: "{\"clusterStrategy\":{\"cfsQuotaBurstPeriodSeconds\":60}}",
-						extension.SystemConfigKey:   "{\"clusterStrategy\":{\"minFreeKbytesFactor\":150}}",
+						configuration.CPUBurstConfigKey: "{\"clusterStrategy\":{\"cfsQuotaBurstPeriodSeconds\":60}}",
+						configuration.SystemConfigKey:   "{\"clusterStrategy\":{\"minFreeKbytesFactor\":150}}",
 					},
 				},
 				configMap: &corev1.ConfigMap{
@@ -378,11 +379,11 @@ func Test_Validate(t *testing.T) {
 						Namespace: sloconfig.ConfigNameSpace,
 					},
 					Data: map[string]string{
-						extension.ColocationConfigKey: "{\"enable\":true,\"metricAggregateDurationSeconds\":60," +
+						configuration.ColocationConfigKey: "{\"enable\":true,\"metricAggregateDurationSeconds\":60," +
 							"\"cpuReclaimThresholdPercent\":70,\"memoryReclaimThresholdPercent\":80,\"updateTimeThresholdSeconds\":300," +
 							"\"degradeTimeMinutes\":5,\"resourceDiffThreshold\":0.1}",
-						extension.ResourceThresholdConfigKey: "{\"clusterStrategy\":{\"enable\":true,\"cpuSuppressThresholdPercent\":60}}",
-						extension.ResourceQOSConfigKey: `
+						configuration.ResourceThresholdConfigKey: "{\"clusterStrategy\":{\"enable\":true,\"cpuSuppressThresholdPercent\":60}}",
+						configuration.ResourceQOSConfigKey: `
 {
   "clusterStrategy": {
     "enable": true,
@@ -394,8 +395,8 @@ func Test_Validate(t *testing.T) {
   }
 }
 `,
-						extension.CPUBurstConfigKey: "{\"clusterStrategy\":{\"cfsQuotaBurstPeriodSeconds\":60}}",
-						extension.SystemConfigKey:   "{\"clusterStrategy\":{\"minFreeKbytesFactor\":150}}",
+						configuration.CPUBurstConfigKey: "{\"clusterStrategy\":{\"cfsQuotaBurstPeriodSeconds\":60}}",
+						configuration.SystemConfigKey:   "{\"clusterStrategy\":{\"minFreeKbytesFactor\":150}}",
 					},
 				},
 				nodeList: []*corev1.Node{
@@ -432,7 +433,7 @@ func Test_Validate(t *testing.T) {
 
 func Test_parallelizeCheckNode(t *testing.T) {
 	type args struct {
-		nodeConfigs []extension.NodeCfgProfile
+		nodeConfigs []configuration.NodeCfgProfile
 		numNodes    int
 	}
 
@@ -444,7 +445,7 @@ func Test_parallelizeCheckNode(t *testing.T) {
 		{
 			name: "node config not conflict:5 nodes,strategy1(1:1),strategy2(2:2)",
 			args: args{
-				nodeConfigs: []extension.NodeCfgProfile{
+				nodeConfigs: []configuration.NodeCfgProfile{
 					{
 						Name: "strategy1",
 						NodeSelector: &metav1.LabelSelector{
@@ -469,7 +470,7 @@ func Test_parallelizeCheckNode(t *testing.T) {
 		{
 			name: "node config not conflict:500 nodes,strategy1(1:1),strategy2(2:2)",
 			args: args{
-				nodeConfigs: []extension.NodeCfgProfile{
+				nodeConfigs: []configuration.NodeCfgProfile{
 					{
 						Name: "strategy1",
 						NodeSelector: &metav1.LabelSelector{
@@ -494,7 +495,7 @@ func Test_parallelizeCheckNode(t *testing.T) {
 		{
 			name: "node config conflict:500 nodes,strategy1(name:30),strategy2(30:30)",
 			args: args{
-				nodeConfigs: []extension.NodeCfgProfile{
+				nodeConfigs: []configuration.NodeCfgProfile{
 					{
 						Name: "strategy1",
 						NodeSelector: &metav1.LabelSelector{
@@ -519,7 +520,7 @@ func Test_parallelizeCheckNode(t *testing.T) {
 		{
 			name: "node config conflict:500 nodes,strategy1(name in (50,51)),strategy2(name:50)",
 			args: args{
-				nodeConfigs: []extension.NodeCfgProfile{
+				nodeConfigs: []configuration.NodeCfgProfile{
 					{
 						Name: "strategy1",
 						NodeSelector: &metav1.LabelSelector{
@@ -548,7 +549,7 @@ func Test_parallelizeCheckNode(t *testing.T) {
 		{
 			name: "multi node config conflict:500 nodes,strategy1,strategy2",
 			args: args{
-				nodeConfigs: []extension.NodeCfgProfile{
+				nodeConfigs: []configuration.NodeCfgProfile{
 					{
 						Name: "strategy1",
 						NodeSelector: &metav1.LabelSelector{
@@ -583,10 +584,10 @@ func Test_parallelizeCheckNode(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			nodeList := makeNodes(tt.args.numNodes)
-			checker, _ := CreateNodeConfigProfileChecker(extension.ColocationConfigKey, func() []extension.NodeCfgProfile {
+			checker, _ := CreateNodeConfigProfileChecker(configuration.ColocationConfigKey, func() []configuration.NodeCfgProfile {
 				return tt.args.nodeConfigs
 			})
-			colocationChecker := &ColocationConfigChecker{CommonChecker: CommonChecker{configKey: extension.ColocationConfigKey, NodeConfigProfileChecker: checker}}
+			colocationChecker := &ColocationConfigChecker{CommonChecker: CommonChecker{configKey: configuration.ColocationConfigKey, NodeConfigProfileChecker: checker}}
 			gotErr := parallelizeCheckNode(context.Background(), nodeList, checkers{colocationChecker})
 			assert.Equal(t, tt.wantErr, gotErr != nil)
 			if gotErr != nil {

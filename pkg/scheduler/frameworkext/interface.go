@@ -25,6 +25,7 @@ import (
 	schedconfig "k8s.io/kubernetes/pkg/scheduler/apis/config"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 
+	apiext "github.com/koordinator-sh/koordinator/apis/extension"
 	schedulingv1alpha1 "github.com/koordinator-sh/koordinator/apis/scheduling/v1alpha1"
 	koordinatorclientset "github.com/koordinator-sh/koordinator/pkg/client/clientset/versioned"
 	koordinatorinformers "github.com/koordinator-sh/koordinator/pkg/client/informers/externalversions"
@@ -40,9 +41,13 @@ type ExtendedHandle interface {
 	Scheduler() Scheduler
 	KoordinatorClientSet() koordinatorclientset.Interface
 	KoordinatorSharedInformerFactory() koordinatorinformers.SharedInformerFactory
-	RegisterErrorHandler(handler ErrorHandler)
+	// RegisterErrorHandlerFilters supports registering custom PreErrorHandlerFilter and PostErrorHandlerFilter to intercept scheduling errors.
+	// If PreErrorHandlerFilter returns true, the k8s scheduler's default error handler and other handlers will not be called.
+	// After handling scheduling errors, will execute PostErrorHandlerFilter, and if return true, other custom handlers will not be called.
+	RegisterErrorHandlerFilters(preFilter PreErrorHandlerFilter, afterFilter PostErrorHandlerFilter)
 	RegisterForgetPodHandler(handler ForgetPodHandler)
 	ForgetPod(pod *corev1.Pod) error
+	GetReservationNominator() ReservationNominator
 }
 
 // FrameworkExtender extends the K8s Scheduling Framework interface to provide more extension methods to support Koordinator.
@@ -58,6 +63,10 @@ type FrameworkExtender interface {
 
 	RunReservationFilterPlugins(ctx context.Context, cycleState *framework.CycleState, pod *corev1.Pod, reservationInfo *ReservationInfo, nodeName string) *framework.Status
 	RunReservationScorePlugins(ctx context.Context, cycleState *framework.CycleState, pod *corev1.Pod, reservationInfos []*ReservationInfo, nodeName string) (PluginToReservationScores, *framework.Status)
+
+	RunNUMATopologyManagerAdmit(ctx context.Context, cycleState *framework.CycleState, pod *corev1.Pod, nodeName string, numaNodes []int, policyType apiext.NUMATopologyPolicy) *framework.Status
+
+	RunResizePod(ctx context.Context, cycleState *framework.CycleState, pod *corev1.Pod, nodeName string) *framework.Status
 }
 
 // SchedulingTransformer is the parent type for all the custom transformer plugins.
@@ -120,6 +129,11 @@ type ReservationFilterPlugin interface {
 type ReservationNominator interface {
 	framework.Plugin
 	NominateReservation(ctx context.Context, cycleState *framework.CycleState, pod *corev1.Pod, nodeName string) (*ReservationInfo, *framework.Status)
+	AddNominatedReservation(pod *corev1.Pod, nodeName string, rInfo *ReservationInfo)
+	RemoveNominatedReservations(pod *corev1.Pod)
+	GetNominatedReservation(pod *corev1.Pod, nodeName string) *ReservationInfo
+	AddNominatedReservePod(reservePod *corev1.Pod, nodeName string)
+	DeleteNominatedReservePod(reservePod *corev1.Pod)
 }
 
 const (
@@ -149,33 +163,22 @@ type PluginToReservationScores map[string]ReservationScoreList
 type ReservationScorePlugin interface {
 	framework.Plugin
 	ScoreReservation(ctx context.Context, cycleState *framework.CycleState, pod *corev1.Pod, reservationInfo *ReservationInfo, nodeName string) (int64, *framework.Status)
+	// ReservationScoreExtensions returns a ReservationScoreExtensions interface if it implements one, or nil if does not.
+	ReservationScoreExtensions() ReservationScoreExtensions
 }
 
-var (
-	nominatedReservationKey framework.StateKey = "koordinator.sh/nominated-reservation"
-)
-
-// nominatedReservationState saves the reservationInfo nominated by ReservationNominator
-type nominatedReservationState struct {
-	reservationInfo *ReservationInfo
+// ReservationScoreExtensions is an interface for Score extended functionality.
+type ReservationScoreExtensions interface {
+	// NormalizeReservationScore is called for all node scores produced by the same plugin's "ScoreReservation"
+	// method. A successful run of NormalizeReservationScore will update the scores list and return
+	// a success status.
+	NormalizeReservationScore(ctx context.Context, cycleState *framework.CycleState, pod *corev1.Pod, scores ReservationScoreList) *framework.Status
 }
 
-func (r *nominatedReservationState) Clone() framework.StateData {
-	return r
-}
-
-func SetNominatedReservation(cycleState *framework.CycleState, reservationInfo *ReservationInfo) {
-	if reservationInfo != nil {
-		cycleState.Write(nominatedReservationKey, &nominatedReservationState{reservationInfo: reservationInfo})
-	}
-}
-
-func GetNominatedReservation(cycleState *framework.CycleState) *ReservationInfo {
-	state, err := cycleState.Read(nominatedReservationKey)
-	if err != nil {
-		return nil
-	}
-	return state.(*nominatedReservationState).reservationInfo
+// ResizePodPlugin is an interface that resize the pod resource spec after reserve.
+// If you want to use the feature, must enable the feature gate ResizePod=true
+type ResizePodPlugin interface {
+	ResizePod(ctx context.Context, cycleState *framework.CycleState, pod *corev1.Pod, nodeName string) *framework.Status
 }
 
 // ReservationPreBindPlugin performs special binding logic specifically for Reservation in the PreBind phase.

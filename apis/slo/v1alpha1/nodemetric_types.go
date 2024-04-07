@@ -17,21 +17,22 @@ limitations under the License.
 package v1alpha1
 
 import (
+	apiext "github.com/koordinator-sh/koordinator/apis/extension"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
-type AggregationType string
+// default NodeMemoryCollectPolicy is usageWithoutPageCache
+// +kubebuilder:validation:Enum=usageWithHotPageCache;usageWithoutPageCache;usageWithPageCache
+type NodeMemoryCollectPolicy string
 
 const (
-	// max is not welcomed since it may import outliers
-	AVG AggregationType = "avg"
-	P99 AggregationType = "p99"
-	P95 AggregationType = "p95"
-	P90 AggregationType = "p90"
-	P50 AggregationType = "p50"
+	UsageWithoutPageCache NodeMemoryCollectPolicy = "usageWithoutPageCache"
+	UsageWithHotPageCache NodeMemoryCollectPolicy = "usageWithHotPageCache"
+	// TODO(BUPT-wxq): implement the UsageWithPageCache policy
+	UsageWithPageCache NodeMemoryCollectPolicy = "usageWithPageCache"
 )
 
 type NodeMetricInfo struct {
@@ -47,16 +48,31 @@ type NodeMetricInfo struct {
 }
 
 type AggregatedUsage struct {
-	Usage    map[AggregationType]ResourceMap `json:"usage,omitempty"`
-	Duration metav1.Duration                 `json:"duration,omitempty"`
+	Usage    map[apiext.AggregationType]ResourceMap `json:"usage,omitempty"`
+	Duration metav1.Duration                        `json:"duration,omitempty"`
 }
 
 type PodMetricInfo struct {
 	Name      string      `json:"name,omitempty"`
 	Namespace string      `json:"namespace,omitempty"`
 	PodUsage  ResourceMap `json:"podUsage,omitempty"`
+	// Priority class of the application
+	Priority apiext.PriorityClass `json:"priority,omitempty"`
+	// QoS class of the application
+	QoS apiext.QoSClass `json:"qos,omitempty"`
 	// Third party extensions for PodMetric
 	Extensions *ExtensionsMap `json:"extensions,omitempty"`
+}
+
+type HostApplicationMetricInfo struct {
+	// Name of the host application
+	Name string `json:"name,omitempty"`
+	// Resource usage of the host application
+	Usage ResourceMap `json:"usage,omitempty"`
+	// Priority class of the application
+	Priority apiext.PriorityClass `json:"priority,omitempty"`
+	// QoS class of the application
+	QoS apiext.QoSClass `json:"qos,omitempty"`
 }
 
 // NodeMetricSpec defines the desired state of NodeMetric
@@ -73,6 +89,8 @@ type NodeMetricCollectPolicy struct {
 	ReportIntervalSeconds *int64 `json:"reportIntervalSeconds,omitempty"`
 	// NodeAggregatePolicy represents the target grain of node aggregated usage
 	NodeAggregatePolicy *AggregatePolicy `json:"nodeAggregatePolicy,omitempty"`
+	// NodeMemoryPolicy represents apply which method collect memory info
+	NodeMemoryCollectPolicy *NodeMemoryCollectPolicy `json:"nodeMemoryCollectPolicy,omitempty"`
 }
 
 type AggregatePolicy struct {
@@ -95,6 +113,9 @@ type NodeMetricStatus struct {
 
 	// PodsMetric contains the metrics for pods belong to this node.
 	PodsMetric []*PodMetricInfo `json:"podsMetric,omitempty"`
+
+	// HostApplicationMetric contains the metrics of out-out-band applications on node.
+	HostApplicationMetric []*HostApplicationMetricInfo `json:"hostApplicationMetric,omitempty"`
 
 	// ProdReclaimableMetric is the indicator statistics of Prod type resources reclaimable
 	ProdReclaimableMetric *ReclaimableMetric `json:"prodReclaimableMetric,omitempty"`

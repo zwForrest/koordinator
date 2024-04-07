@@ -23,6 +23,7 @@ import (
 
 const (
 	NodeCPUInfoKey          = "node_cpu_info"
+	NodeNUMAInfoKey         = "node_numa_info"
 	NodeLocalStorageInfoKey = "node_local_storage_info"
 )
 
@@ -35,30 +36,39 @@ const (
 type MetricKind string
 
 const (
-	NodeMetricCPUUsage     MetricKind = "node_cpu_usage"
-	NodeMetricMemoryUsage  MetricKind = "node_memory_usage"
-	NodeMetricGPUCoreUsage MetricKind = "node_gpu_core_usage"
-	NodeMetricGPUMemUsage  MetricKind = "node_gpu_memory_usage"
-	NodeMetricGPUMemTotal  MetricKind = "node_gpu_memory_total"
+	NodeMetricCPUUsage           MetricKind = "node_cpu_usage"
+	NodeMetricMemoryUsage        MetricKind = "node_memory_usage"
+	NodeMemoryWithPageCacheUsage MetricKind = "node_memory_usage_with_page_cache"
+	NodeMetricGPUCoreUsage       MetricKind = "node_gpu_core_usage"
+	NodeMetricGPUMemUsage        MetricKind = "node_gpu_memory_usage"
+	NodeMetricGPUMemTotal        MetricKind = "node_gpu_memory_total"
 
-	PriorityMetricCPUUsage     MetricKind = "priority_cpu_usage"
-	PriorityMetricCPURealLimit MetricKind = "priority_cpu_real_limit"
-	PriorityMetricCPURequest   MetricKind = "priority_cpu_request"
+	SysMetricCPUUsage    MetricKind = "sys_cpu_usage"
+	SysMetricMemoryUsage MetricKind = "sys_memory_usage"
 
-	PodMetricCPUUsage     MetricKind = "pod_cpu_usage"
-	PodMetricMemoryUsage  MetricKind = "pod_memory_usage"
-	PodMetricGPUCoreUsage MetricKind = "pod_gpu_core_usage"
-	PodMetricGPUMemUsage  MetricKind = "pod_gpu_memory_usage"
+	// NodeBE
+	NodeMetricBE MetricKind = "node_be"
+
+	PodMetricCPUUsage           MetricKind = "pod_cpu_usage"
+	PodMetricMemoryUsage        MetricKind = "pod_memory_usage"
+	PodMemoryWithPageCacheUsage MetricKind = "pod_memory_usage_with_page_cache"
+	PodMetricGPUCoreUsage       MetricKind = "pod_gpu_core_usage"
+	PodMetricGPUMemUsage        MetricKind = "pod_gpu_memory_usage"
 	// PodMetricGPUMemTotal       MetricKind = "pod_gpu_memory_total"
 
-	ContainerMetricCPUUsage     MetricKind = "container_cpu_usage"
-	ContainerMetricMemoryUsage  MetricKind = "container_memory_usage"
-	ContainerMetricGPUCoreUsage MetricKind = "container_gpu_core_usage"
-	ContainerMetricGPUMemUsage  MetricKind = "container_gpu_memory_usage"
+	ContainerMetricCPUUsage           MetricKind = "container_cpu_usage"
+	ContainerMetricMemoryUsage        MetricKind = "container_memory_usage"
+	ContainerMemoryWithPageCacheUsage MetricKind = "container_memory_usage_with_page_cache"
+	ContainerMetricGPUCoreUsage       MetricKind = "container_gpu_core_usage"
+	ContainerMetricGPUMemUsage        MetricKind = "container_gpu_memory_usage"
 	// ContainerMetricGPUMemTotal       MetricKind = "container_gpu_memory_total"
 
 	PodMetricCPUThrottled       MetricKind = "pod_cpu_throttled"
 	ContainerMetricCPUThrottled MetricKind = "container_cpu_throttled"
+
+	HostAppCPUUsage                 MetricKind = "host_application_cpu_usage"
+	HostAppMemoryUsage              MetricKind = "host_application_memory_usage"
+	HostAppMemoryWithPageCacheUsage MetricKind = "host_application_memory_usage_with_page_cache"
 
 	// CPI
 	ContainerMetricCPI MetricKind = "container_cpi"
@@ -68,6 +78,16 @@ const (
 	ContainerMetricPSICPUFullSupported MetricKind = "container_psi_cpu_full_supported"
 	PodMetricPSI                       MetricKind = "pod_psi"
 	PodMetricPSICPUFullSupported       MetricKind = "pod_psi_cpu_full_supported"
+
+	//cold memory metrics
+	NodeMemoryWithHotPageUsage      MetricKind = "node_memory_with_hot_page_usage"
+	PodMemoryWithHotPageUsage       MetricKind = "pod_memory_with_hot_page_usage"
+	ContainerMemoryWithHotPageUsage MetricKind = "container_memory_with_hot_page_usage"
+	HostAppMemoryWithHotPageUsage   MetricKind = "host_application_memory_with_hot_page_usage"
+	NodeMemoryColdPageSize          MetricKind = "node_memory_cold_page_size"
+	HostAppMemoryColdPageSize       MetricKind = "host_application_memory_cold_page_size"
+	PodMemoryColdPageSize           MetricKind = "pod_memory_cold_page_size"
+	ContainerMemoryColdPageSize     MetricKind = "container_memory_cold_page_size"
 )
 
 // MetricProperty is the property of metric
@@ -85,6 +105,11 @@ const (
 	MetricPropertyPSIResource  MetricProperty = "psi_resource"
 	MetricPropertyPSIPrecision MetricProperty = "psi_precision"
 	MetricPropertyPSIDegree    MetricProperty = "psi_degree"
+
+	MetricPropertyBEResource   MetricProperty = "be_resource"
+	MetricPropertyBEAllocation MetricProperty = "be_allocation"
+
+	MetricPropertyHostAppName MetricProperty = "host_app_name"
 )
 
 // MetricPropertyValue is the property value
@@ -102,6 +127,11 @@ const (
 	PSIPrecision300 MetricPropertyValue = "300"
 	PSIDegreeFull   MetricPropertyValue = "full"
 	PSIDegreeSome   MetricPropertyValue = "some"
+
+	BEResourceCPU                 MetricPropertyValue = "cpu"
+	BEResourceAllocationUsage     MetricPropertyValue = "usage"
+	BEResourceAllocationRealLimit MetricPropertyValue = "real-limit"
+	BEResourceAllocationRequest   MetricPropertyValue = "request"
 )
 
 // MetricPropertiesFunc is a collection of functions generating metric property k-v, for metric sample generation and query
@@ -115,26 +145,14 @@ var MetricPropertiesFunc = struct {
 	ContainerPSI        func(string, string, string, string, string) map[MetricProperty]string
 	PodGPU              func(string, string, string) map[MetricProperty]string
 	ContainerGPU        func(string, string, string) map[MetricProperty]string
+	NodeBE              func(string, string) map[MetricProperty]string
+	HostApplication     func(string) map[MetricProperty]string
 }{
 	Pod: func(podUID string) map[MetricProperty]string {
 		return map[MetricProperty]string{MetricPropertyPodUID: podUID}
 	},
-	PodGPU: func(podUID, minor, uuid string) map[MetricProperty]string {
-		return map[MetricProperty]string{
-			MetricPropertyPodUID:        podUID,
-			MetricPropertyGPUMinor:      minor,
-			MetricPropertyGPUDeviceUUID: uuid,
-		}
-	},
 	Container: func(containerID string) map[MetricProperty]string {
 		return map[MetricProperty]string{MetricPropertyContainerID: containerID}
-	},
-	ContainerGPU: func(containerID, minor, uuid string) map[MetricProperty]string {
-		return map[MetricProperty]string{
-			MetricPropertyContainerID:   containerID,
-			MetricPropertyGPUMinor:      minor,
-			MetricPropertyGPUDeviceUUID: uuid,
-		}
 	},
 	GPU: func(minor, uuid string) map[MetricProperty]string {
 		return map[MetricProperty]string{MetricPropertyGPUMinor: minor, MetricPropertyGPUDeviceUUID: uuid}
@@ -150,6 +168,18 @@ var MetricPropertiesFunc = struct {
 	},
 	ContainerPSI: func(podUID, containerID, psiResource, psiPrecision, psiDegree string) map[MetricProperty]string {
 		return map[MetricProperty]string{MetricPropertyPodUID: podUID, MetricPropertyContainerID: containerID, MetricPropertyPSIResource: psiResource, MetricPropertyPSIPrecision: psiPrecision, MetricPropertyPSIDegree: psiDegree}
+	},
+	PodGPU: func(podUID, minor, uuid string) map[MetricProperty]string {
+		return map[MetricProperty]string{MetricPropertyPodUID: podUID, MetricPropertyGPUMinor: minor, MetricPropertyGPUDeviceUUID: uuid}
+	},
+	ContainerGPU: func(containerID, minor, uuid string) map[MetricProperty]string {
+		return map[MetricProperty]string{MetricPropertyContainerID: containerID, MetricPropertyGPUMinor: minor, MetricPropertyGPUDeviceUUID: uuid}
+	},
+	NodeBE: func(beResource, beResourceAllocation string) map[MetricProperty]string {
+		return map[MetricProperty]string{MetricPropertyBEResource: beResource, MetricPropertyBEAllocation: beResourceAllocation}
+	},
+	HostApplication: func(appName string) map[MetricProperty]string {
+		return map[MetricProperty]string{MetricPropertyHostAppName: appName}
 	},
 }
 

@@ -25,8 +25,13 @@ archives:
     format: binary
     builds:
       - koord-runtime-proxy
-    replacements:
-      amd64: x86_64
+    # Default template: https://goreleaser.com/customization/archive/
+    name_template: >-
+      {{ .Binary }}_
+      {{ .Version }}_
+      {{ .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else }}{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}{{ end }}
 checksum:
   name_template: 'checksums.txt'
 snapshot:

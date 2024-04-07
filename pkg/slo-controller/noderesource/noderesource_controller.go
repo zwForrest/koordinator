@@ -34,7 +34,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
-	schedulingv1alpha1 "github.com/koordinator-sh/koordinator/apis/scheduling/v1alpha1"
 	slov1alpha1 "github.com/koordinator-sh/koordinator/apis/slo/v1alpha1"
 	"github.com/koordinator-sh/koordinator/pkg/slo-controller/config"
 	"github.com/koordinator-sh/koordinator/pkg/slo-controller/metrics"
@@ -50,6 +49,7 @@ const (
 
 var (
 	NodeResourcePlugins []string
+	AllPlugins          []string
 )
 
 type NodeResourceReconciler struct {
@@ -122,7 +122,7 @@ func (r *NodeResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{Requeue: true}, err
 	}
 
-	// do other node updates. e.g. update device resources
+	// do other node updates.
 	if err := r.updateNodeExtensions(node, nodeMetric, podList); err != nil {
 		klog.ErrorS(err, "failed to update node extensions for node", "node", node.Name)
 		return ctrl.Result{Requeue: true}, err
@@ -137,7 +137,14 @@ func InitFlags(fs *flag.FlagSet) {
 		"'-noderesource-plugins=*' enables all plugins. "+
 		"'-noderesource-plugins=BatchResource' means only the 'BatchResource' plugin is enabled. "+
 		"'-noderesource-plugins=*,-BatchResource' means all plugins except the 'BatchResource' plugin are enabled.\n"+
-		"All plugins: %s", strings.Join(NodeResourcePlugins, ", ")))
+		"All plugins: %s", strings.Join(AllPlugins, ", ")))
+}
+
+func addPluginOption(plugin framework.Plugin, enabled bool) {
+	AllPlugins = append(AllPlugins, plugin.Name())
+	if enabled {
+		NodeResourcePlugins = append(NodeResourcePlugins, plugin.Name())
+	}
 }
 
 func isPluginEnabled(pluginName string) bool {
@@ -172,13 +179,19 @@ func Add(mgr ctrl.Manager) error {
 }
 
 func (r *NodeResourceReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	handler := config.NewColocationHandlerForConfigMapEvent(r.Client, *sloconfig.NewDefaultColocationCfg(), r.Recorder)
-	r.cfgCache = handler
-	return ctrl.NewControllerManagedBy(mgr).
+	cfgHandler := config.NewColocationHandlerForConfigMapEvent(r.Client, *sloconfig.NewDefaultColocationCfg(), r.Recorder)
+	r.cfgCache = cfgHandler
+
+	builder := ctrl.NewControllerManagedBy(mgr).
+		Named(Name). // avoid conflict with others reconciling `Node`
 		For(&corev1.Node{}).
 		Watches(&source.Kind{Type: &slov1alpha1.NodeMetric{}}, &EnqueueRequestForNodeMetric{syncContext: r.NodeSyncContext}).
-		Watches(&source.Kind{Type: &schedulingv1alpha1.Device{}}, &EnqueueRequestForDevice{syncContext: r.GPUSyncContext}).
-		Watches(&source.Kind{Type: &corev1.ConfigMap{}}, handler).
-		Named(Name). // avoid conflict with others reconciling `Node`
-		Complete(r)
+		Watches(&source.Kind{Type: &corev1.ConfigMap{}}, cfgHandler)
+
+	// setup plugins
+	// allow plugins to mutate controller via the builder
+	opt := framework.NewOption().WithManager(mgr).WithControllerBuilder(builder)
+	framework.RunSetupExtenders(opt)
+
+	return opt.CompleteController(r)
 }

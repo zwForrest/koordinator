@@ -20,14 +20,116 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"sync"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 
 	"github.com/koordinator-sh/koordinator/pkg/scheduler/frameworkext"
 	reservationutil "github.com/koordinator-sh/koordinator/pkg/util/reservation"
 )
+
+type nominator struct {
+	// nominatedPodToNode is map keyed by a Pod UID to the node name where it is nominated.
+	nominatedPodToNode map[types.UID]map[string]types.UID
+	// nominatedReservePod is map keyed by nodeName, value is the nominated reservation's PodInfo
+	nominatedReservePod       map[string][]*framework.PodInfo
+	nominatedReservePodToNode map[types.UID]string
+	lock                      sync.RWMutex
+}
+
+func newNominator() *nominator {
+	return &nominator{
+		nominatedPodToNode:        map[types.UID]map[string]types.UID{},
+		nominatedReservePod:       map[string][]*framework.PodInfo{},
+		nominatedReservePodToNode: map[types.UID]string{},
+	}
+}
+
+func (nm *nominator) AddNominatedReservation(pod *corev1.Pod, nodeName string, rInfo *frameworkext.ReservationInfo) {
+	if rInfo == nil {
+		return
+	}
+	nm.lock.Lock()
+	defer nm.lock.Unlock()
+
+	nodeToReservation := nm.nominatedPodToNode[pod.UID]
+	if nodeToReservation == nil {
+		nodeToReservation = map[string]types.UID{}
+		nm.nominatedPodToNode[pod.UID] = nodeToReservation
+	}
+	nodeToReservation[nodeName] = rInfo.UID()
+}
+
+func (nm *nominator) AddNominatedReservePod(pi *framework.PodInfo, nodeName string) {
+	nm.lock.Lock()
+	defer nm.lock.Unlock()
+
+	// Always delete the reservation if it already exists, to ensure we never store more than
+	// one instance of the reservation.
+	nm.deleteReservePod(pi)
+
+	nm.nominatedReservePodToNode[pi.Pod.UID] = nodeName
+	for _, npi := range nm.nominatedReservePod[nodeName] {
+		if npi.Pod.UID == pi.Pod.UID {
+			klog.V(4).InfoS("reservation already exists in the nominator", "pod", klog.KObj(npi.Pod))
+			return
+		}
+	}
+	nm.nominatedReservePod[nodeName] = append(nm.nominatedReservePod[nodeName], pi)
+}
+
+func (nm *nominator) NominatedReservePodForNode(nodeName string) []*framework.PodInfo {
+	nm.lock.RLock()
+	defer nm.lock.RUnlock()
+	// Make a copy of the nominated Pods so the caller can mutate safely.
+	reservePods := make([]*framework.PodInfo, len(nm.nominatedReservePod[nodeName]))
+	for i := 0; i < len(reservePods); i++ {
+		reservePods[i] = nm.nominatedReservePod[nodeName][i].DeepCopy()
+	}
+	return reservePods
+}
+
+func (nm *nominator) DeleteReservePod(pi *framework.PodInfo) {
+	nm.lock.Lock()
+	defer nm.lock.Unlock()
+
+	nm.deleteReservePod(pi)
+}
+
+func (nm *nominator) deleteReservePod(pi *framework.PodInfo) {
+	nnn, ok := nm.nominatedReservePodToNode[pi.Pod.UID]
+	if !ok {
+		return
+	}
+	for i, np := range nm.nominatedReservePod[nnn] {
+		if np.Pod.UID == pi.Pod.UID {
+			nm.nominatedReservePod[nnn] = append(nm.nominatedReservePod[nnn][:i], nm.nominatedReservePod[nnn][i+1:]...)
+			if len(nm.nominatedReservePod[nnn]) == 0 {
+				delete(nm.nominatedReservePod, nnn)
+			}
+			break
+		}
+	}
+	delete(nm.nominatedReservePodToNode, pi.Pod.UID)
+}
+
+func (nm *nominator) RemoveNominatedReservation(pod *corev1.Pod) {
+	nm.lock.Lock()
+	defer nm.lock.Unlock()
+
+	delete(nm.nominatedPodToNode, pod.UID)
+}
+
+func (nm *nominator) GetNominatedReservation(pod *corev1.Pod, nodeName string) types.UID {
+	nm.lock.RLock()
+	defer nm.lock.RUnlock()
+	return nm.nominatedPodToNode[pod.UID][nodeName]
+}
+
+// TODO(joseph): Should move the function into frameworkext package as default nominator
 
 func (pl *Plugin) NominateReservation(ctx context.Context, cycleState *framework.CycleState, pod *corev1.Pod, nodeName string) (*frameworkext.ReservationInfo, *framework.Status) {
 	if reservationutil.IsReservePod(pod) {
@@ -40,9 +142,9 @@ func (pl *Plugin) NominateReservation(ctx context.Context, cycleState *framework
 		return nil, nil
 	}
 
-	highestScorer, _ := findMostPreferredReservationByOrder(reservationInfos)
-	if highestScorer != nil {
-		return highestScorer, nil
+	rInfo := pl.GetNominatedReservation(pod, nodeName)
+	if rInfo != nil {
+		return rInfo, nil
 	}
 
 	extender, ok := pl.handle.(frameworkext.FrameworkExtender)
@@ -62,6 +164,11 @@ func (pl *Plugin) NominateReservation(ctx context.Context, cycleState *framework
 		return nil, nil
 	}
 
+	nominated, _ := findMostPreferredReservationByOrder(reservations)
+	if nominated != nil {
+		return nominated, nil
+	}
+
 	reservationScoreList, err := prioritizeReservations(ctx, extender, cycleState, pod, reservations, nodeName)
 	if err != nil {
 		return nil, framework.AsStatus(err)
@@ -70,18 +177,42 @@ func (pl *Plugin) NominateReservation(ctx context.Context, cycleState *framework
 		return reservationScoreList[i].Score > reservationScoreList[j].Score
 	})
 
-	highestScorer = nil
+	nominated = nil
 	for _, v := range reservations {
 		if v.UID() == reservationScoreList[0].UID {
-			highestScorer = v
+			nominated = v
 			break
 		}
 	}
-	if highestScorer == nil {
+	if nominated == nil {
 		return nil, framework.AsStatus(fmt.Errorf("missing the most suitable reservation %v(%v)",
 			klog.KRef(reservationScoreList[0].Namespace, reservationScoreList[0].Name), reservationScoreList[0].UID))
 	}
-	return highestScorer, nil
+	return nominated, nil
+}
+
+func (pl *Plugin) AddNominatedReservation(pod *corev1.Pod, nodeName string, rInfo *frameworkext.ReservationInfo) {
+	pl.nominator.AddNominatedReservation(pod, nodeName, rInfo)
+}
+
+func (pl *Plugin) RemoveNominatedReservations(pod *corev1.Pod) {
+	pl.nominator.RemoveNominatedReservation(pod)
+}
+
+func (pl *Plugin) AddNominatedReservePod(pod *corev1.Pod, nodeName string) {
+	pl.nominator.AddNominatedReservePod(framework.NewPodInfo(pod), nodeName)
+}
+
+func (pl *Plugin) DeleteNominatedReservePod(pod *corev1.Pod) {
+	pl.nominator.DeleteReservePod(framework.NewPodInfo(pod))
+}
+
+func (pl *Plugin) GetNominatedReservation(pod *corev1.Pod, nodeName string) *frameworkext.ReservationInfo {
+	reservationID := pl.nominator.GetNominatedReservation(pod, nodeName)
+	if reservationID == "" {
+		return nil
+	}
+	return pl.reservationCache.getReservationInfoByUID(reservationID)
 }
 
 func prioritizeReservations(

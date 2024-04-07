@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"sync"
 
 	jsonpatch "github.com/evanphx/json-patch"
 	corev1 "k8s.io/api/core/v1"
@@ -70,6 +71,20 @@ func MinInt64(i, j int64) int64 {
 }
 
 func MaxInt64(i, j int64) int64 {
+	if i > j {
+		return i
+	}
+	return j
+}
+
+func MinFloat64(i, j float64) float64 {
+	if i < j {
+		return i
+	}
+	return j
+}
+
+func MaxFloat64(i, j float64) float64 {
 	if i > j {
 		return i
 	}
@@ -161,4 +176,42 @@ func BoolToFloat64(b bool) float64 {
 		return 1.0
 	}
 	return 0.0
+}
+
+func IsIn(arr []string, val string) bool {
+	for _, cur := range arr {
+		if cur == val {
+			return true
+		}
+	}
+
+	return false
+}
+
+// TODO: Replace this function with the standard library after go1.21+ version
+func OnceValues(f func() ([]int, error)) func() ([]int, error) {
+	var (
+		once  sync.Once
+		valid bool
+		p     any
+		r1    []int
+		r2    error
+	)
+	g := func() {
+		defer func() {
+			p = recover()
+			if !valid {
+				panic(p)
+			}
+		}()
+		r1, r2 = f()
+		valid = true
+	}
+	return func() ([]int, error) {
+		once.Do(g)
+		if !valid {
+			panic(p)
+		}
+		return r1, r2
+	}
 }

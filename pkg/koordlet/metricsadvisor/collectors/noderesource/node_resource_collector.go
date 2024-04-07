@@ -35,6 +35,10 @@ const (
 	CollectorName = "NodeResourceCollector"
 )
 
+var (
+	timeNow = time.Now
+)
+
 // TODO more ut is needed for this plugin
 type nodeResourceCollector struct {
 	collectInterval time.Duration
@@ -44,6 +48,7 @@ type nodeResourceCollector struct {
 
 	lastNodeCPUStat *framework.CPUStat
 
+	sharedState      *framework.SharedState
 	deviceCollectors map[string]framework.DeviceCollector
 }
 
@@ -62,6 +67,7 @@ func (n *nodeResourceCollector) Enabled() bool {
 
 func (n *nodeResourceCollector) Setup(c *framework.Context) {
 	n.deviceCollectors = c.DeviceCollectors
+	n.sharedState = c.State
 }
 
 func (n *nodeResourceCollector) Run(stopCh <-chan struct{}) {
@@ -82,18 +88,18 @@ func (n *nodeResourceCollector) Started() bool {
 func (n *nodeResourceCollector) collectNodeResUsed() {
 	klog.V(6).Info("collectNodeResUsed start")
 	nodeMetrics := make([]metriccache.MetricSample, 0)
-	collectTime := time.Now()
+	collectTime := timeNow()
 
 	// get the accumulated cpu ticks
 	currentCPUTick, err0 := koordletutil.GetCPUStatUsageTicks()
 	// NOTE: The collected memory usage is in kilobytes not bytes.
-	memUsageKB, err1 := koordletutil.GetMemInfoUsageKB()
+	memInfo, err1 := koordletutil.GetMemInfo()
 	if err0 != nil || err1 != nil {
 		klog.Warningf("failed to collect node usage, CPU err: %s, Memory err: %s", err0, err1)
 		return
 	}
 
-	memUsageValue := 1024 * float64(memUsageKB)
+	memUsageValue := float64(memInfo.MemUsageBytes())
 	memUsageMetrics, err := metriccache.NodeMemoryUsageMetric.GenerateSample(nil, collectTime, memUsageValue)
 	if err != nil {
 		klog.Warningf("generate node cpu metrics failed, err %v", err)
@@ -120,12 +126,19 @@ func (n *nodeResourceCollector) collectNodeResUsed() {
 	}
 	nodeMetrics = append(nodeMetrics, cpuUsageMetrics)
 
-	for _, deviceCollector := range n.deviceCollectors {
-		if metric, _ := deviceCollector.GetNodeMetric(); metric != nil {
+	for name, deviceCollector := range n.deviceCollectors {
+		if !deviceCollector.Enabled() {
+			klog.V(6).Infof("skip node metrics from the disabled device collector %s", name)
+			continue
+		}
+
+		if metric, err := deviceCollector.GetNodeMetric(); err != nil {
+			klog.Warningf("get node metrics from the device collector %s failed, err: %s", name, err)
+		} else {
 			nodeMetrics = append(nodeMetrics, metric...)
 		}
 		if info := deviceCollector.Infos(); info != nil {
-			n.metricDB.Set(koordletutil.GPUDeviceType, info)
+			n.metricDB.Set(info.Type(), info)
 		}
 	}
 
@@ -139,6 +152,9 @@ func (n *nodeResourceCollector) collectNodeResUsed() {
 		klog.Warningf("Commit node metrics failed, reason: %v", err)
 		return
 	}
+
+	n.sharedState.UpdateNodeUsage(metriccache.Point{Timestamp: collectTime, Value: cpuUsageValue},
+		metriccache.Point{Timestamp: collectTime, Value: memUsageValue})
 
 	// update collect time
 	n.started.Store(true)

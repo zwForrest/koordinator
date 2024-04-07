@@ -17,6 +17,8 @@ limitations under the License.
 package frameworkext
 
 import (
+	"sync"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/uuid"
@@ -25,6 +27,20 @@ import (
 )
 
 var AssignedPodDelete = framework.ClusterEvent{Resource: framework.Pod, ActionType: framework.Delete, Label: "AssignedPodDelete"}
+
+var podPool = &sync.Pool{
+	New: func() interface{} {
+		uid := uuid.NewUUID()
+		pod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      string(uid),
+				Namespace: "default",
+				UID:       uid,
+			},
+		}
+		return pod
+	},
+}
 
 // Scheduler exports scheduler internal cache and queue interface for testability.
 type Scheduler interface {
@@ -43,6 +59,8 @@ type SchedulerCache interface {
 	InvalidNodeInfo(nodeName string) error
 }
 
+type PreEnqueueCheck func(pod *corev1.Pod) bool
+
 type SchedulingQueue interface {
 	Add(pod *corev1.Pod) error
 	Update(oldPod, newPod *corev1.Pod) error
@@ -51,7 +69,7 @@ type SchedulingQueue interface {
 	SchedulingCycle() int64
 	AssignedPodAdded(pod *corev1.Pod)
 	AssignedPodUpdated(pod *corev1.Pod)
-	MoveAllToActiveOrBackoffQueue(event framework.ClusterEvent)
+	MoveAllToActiveOrBackoffQueue(event framework.ClusterEvent, preCheck PreEnqueueCheck)
 }
 
 var _ Scheduler = &SchedulerAdapter{}
@@ -68,8 +86,13 @@ func (s *SchedulerAdapter) GetSchedulingQueue() SchedulingQueue {
 	return &queueAdapter{s.Scheduler}
 }
 
-func (s *SchedulerAdapter) MoveAllToActiveOrBackoffQueue(event framework.ClusterEvent) {
-	s.Scheduler.SchedulingQueue.MoveAllToActiveOrBackoffQueue(event, nil)
+func (s *SchedulerAdapter) MoveAllToActiveOrBackoffQueue(event framework.ClusterEvent, preCheck PreEnqueueCheck) {
+	s.Scheduler.SchedulingQueue.MoveAllToActiveOrBackoffQueue(event, func(pod *corev1.Pod) bool {
+		if preCheck != nil {
+			return preCheck(pod)
+		}
+		return false
+	})
 }
 
 var _ SchedulerCache = &cacheAdapter{}
@@ -106,17 +129,10 @@ func (c *cacheAdapter) ForgetPod(pod *corev1.Pod) error {
 }
 
 func (c *cacheAdapter) InvalidNodeInfo(nodeName string) error {
-	uid := uuid.NewUUID()
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      string(uid),
-			Namespace: "default",
-			UID:       uid,
-		},
-		Spec: corev1.PodSpec{
-			NodeName: nodeName,
-		},
-	}
+	val := podPool.Get()
+	defer podPool.Put(val)
+	pod := val.(*corev1.Pod)
+	pod.Spec.NodeName = nodeName
 	err := c.scheduler.Cache.AddPod(pod)
 	if err != nil {
 		return err
@@ -158,8 +174,13 @@ func (q *queueAdapter) AssignedPodUpdated(pod *corev1.Pod) {
 	q.scheduler.SchedulingQueue.AssignedPodUpdated(pod)
 }
 
-func (q *queueAdapter) MoveAllToActiveOrBackoffQueue(event framework.ClusterEvent) {
-	q.scheduler.SchedulingQueue.MoveAllToActiveOrBackoffQueue(event, nil)
+func (q *queueAdapter) MoveAllToActiveOrBackoffQueue(event framework.ClusterEvent, preCheck PreEnqueueCheck) {
+	q.scheduler.SchedulingQueue.MoveAllToActiveOrBackoffQueue(event, func(pod *corev1.Pod) bool {
+		if preCheck != nil {
+			return preCheck(pod)
+		}
+		return false
+	})
 }
 
 var _ Scheduler = &FakeScheduler{}
@@ -169,6 +190,8 @@ type FakeScheduler struct {
 	Pods       map[string]*corev1.Pod
 	AssumedPod map[string]*corev1.Pod
 	Queue      *FakeQueue
+	lock       sync.Mutex
+	NodeInfos  map[string]*framework.NodeInfo
 }
 
 func NewFakeScheduler() *FakeScheduler {
@@ -181,6 +204,7 @@ func NewFakeScheduler() *FakeScheduler {
 			AssignedPods:        map[string]*corev1.Pod{},
 			AssignedUpdatedPods: map[string]*corev1.Pod{},
 		},
+		NodeInfos: map[string]*framework.NodeInfo{},
 	}
 }
 
@@ -243,7 +267,20 @@ func (f *FakeScheduler) ForgetPod(pod *corev1.Pod) error {
 }
 
 func (f *FakeScheduler) InvalidNodeInfo(nodeName string) error {
-	return nil
+	val := podPool.Get()
+	defer podPool.Put(val)
+	pod := val.(*corev1.Pod)
+	pod.Spec.NodeName = nodeName
+
+	f.lock.Lock()
+	defer f.lock.Unlock()
+	nodeInfo := f.NodeInfos[nodeName]
+	if nodeInfo == nil {
+		nodeInfo = framework.NewNodeInfo()
+		f.NodeInfos[nodeName] = nodeInfo
+	}
+	nodeInfo.AddPod(pod)
+	return nodeInfo.RemovePod(pod)
 }
 
 func (f *FakeQueue) Add(pod *corev1.Pod) error {
@@ -285,6 +322,6 @@ func (f *FakeQueue) AssignedPodUpdated(pod *corev1.Pod) {
 	f.AssignedUpdatedPods[key] = pod
 }
 
-func (f *FakeQueue) MoveAllToActiveOrBackoffQueue(event framework.ClusterEvent) {
+func (f *FakeQueue) MoveAllToActiveOrBackoffQueue(event framework.ClusterEvent, preCheck PreEnqueueCheck) {
 
 }

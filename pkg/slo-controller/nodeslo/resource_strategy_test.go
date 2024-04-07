@@ -18,34 +18,37 @@ package nodeslo
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/pointer"
 
-	"github.com/koordinator-sh/koordinator/apis/extension"
+	"github.com/koordinator-sh/koordinator/apis/configuration"
+	ext "github.com/koordinator-sh/koordinator/apis/extension"
 	slov1alpha1 "github.com/koordinator-sh/koordinator/apis/slo/v1alpha1"
 	"github.com/koordinator-sh/koordinator/pkg/util/sloconfig"
 )
 
 func Test_getResourceThresholdSpec(t *testing.T) {
 	defaultSLOCfg := DefaultSLOCfg()
-	testingResourceThresholdCfg := &extension.ResourceThresholdCfg{
+	testingResourceThresholdCfg := &configuration.ResourceThresholdCfg{
 		ClusterStrategy: &slov1alpha1.ResourceThresholdStrategy{
 			Enable:                      pointer.Bool(true),
 			CPUSuppressThresholdPercent: pointer.Int64(60),
 		},
 	}
-	testingResourceThresholdCfg1 := &extension.ResourceThresholdCfg{
+	testingResourceThresholdCfg1 := &configuration.ResourceThresholdCfg{
 		ClusterStrategy: &slov1alpha1.ResourceThresholdStrategy{
 			Enable:                      pointer.Bool(true),
 			CPUSuppressThresholdPercent: pointer.Int64(60),
 		},
-		NodeStrategies: []extension.NodeResourceThresholdStrategy{
+		NodeStrategies: []configuration.NodeResourceThresholdStrategy{
 			{
-				NodeCfgProfile: extension.NodeCfgProfile{
+				NodeCfgProfile: configuration.NodeCfgProfile{
 					NodeSelector: &metav1.LabelSelector{
 						MatchLabels: map[string]string{
 							"xxx": "yyy",
@@ -60,7 +63,7 @@ func Test_getResourceThresholdSpec(t *testing.T) {
 	}
 	type args struct {
 		node *corev1.Node
-		cfg  *extension.ResourceThresholdCfg
+		cfg  *configuration.ResourceThresholdCfg
 	}
 	tests := []struct {
 		name    string
@@ -122,7 +125,7 @@ func Test_calculateResourceThresholdCfgMerged(t *testing.T) {
 	oldSLOCfg := DefaultSLOCfg()
 	oldSLOCfg.ThresholdCfgMerged.ClusterStrategy.CPUSuppressThresholdPercent = pointer.Int64(30)
 
-	testingResourceThresholdCfg := &extension.ResourceThresholdCfg{
+	testingResourceThresholdCfg := &configuration.ResourceThresholdCfg{
 		ClusterStrategy: &slov1alpha1.ResourceThresholdStrategy{
 			Enable:                      pointer.Bool(true),
 			CPUSuppressThresholdPercent: pointer.Int64(60),
@@ -134,14 +137,14 @@ func Test_calculateResourceThresholdCfgMerged(t *testing.T) {
 	expectTestingResourceThresholdCfg.ClusterStrategy.Enable = testingResourceThresholdCfg.ClusterStrategy.Enable
 	expectTestingResourceThresholdCfg.ClusterStrategy.CPUSuppressThresholdPercent = testingResourceThresholdCfg.ClusterStrategy.CPUSuppressThresholdPercent
 
-	testingResourceThresholdCfg1 := &extension.ResourceThresholdCfg{
+	testingResourceThresholdCfg1 := &configuration.ResourceThresholdCfg{
 		ClusterStrategy: &slov1alpha1.ResourceThresholdStrategy{
 			Enable:                      pointer.Bool(true),
 			CPUSuppressThresholdPercent: pointer.Int64(60),
 		},
-		NodeStrategies: []extension.NodeResourceThresholdStrategy{
+		NodeStrategies: []configuration.NodeResourceThresholdStrategy{
 			{
-				NodeCfgProfile: extension.NodeCfgProfile{
+				NodeCfgProfile: configuration.NodeCfgProfile{
 					NodeSelector: &metav1.LabelSelector{
 						MatchLabels: map[string]string{
 							"xxx": "yyy",
@@ -153,7 +156,7 @@ func Test_calculateResourceThresholdCfgMerged(t *testing.T) {
 				},
 			},
 			{
-				NodeCfgProfile: extension.NodeCfgProfile{
+				NodeCfgProfile: configuration.NodeCfgProfile{
 					NodeSelector: &metav1.LabelSelector{
 						MatchLabels: map[string]string{
 							"zzz": "zzz",
@@ -171,9 +174,9 @@ func Test_calculateResourceThresholdCfgMerged(t *testing.T) {
 	expectTestingResourceThresholdCfg1 := defaultSLOCfg.ThresholdCfgMerged.DeepCopy()
 	expectTestingResourceThresholdCfg1.ClusterStrategy.Enable = testingResourceThresholdCfg1.ClusterStrategy.Enable
 	expectTestingResourceThresholdCfg1.ClusterStrategy.CPUSuppressThresholdPercent = testingResourceThresholdCfg1.ClusterStrategy.CPUSuppressThresholdPercent
-	expectTestingResourceThresholdCfg1.NodeStrategies = []extension.NodeResourceThresholdStrategy{
+	expectTestingResourceThresholdCfg1.NodeStrategies = []configuration.NodeResourceThresholdStrategy{
 		{
-			NodeCfgProfile: extension.NodeCfgProfile{
+			NodeCfgProfile: configuration.NodeCfgProfile{
 				NodeSelector: &metav1.LabelSelector{
 					MatchLabels: map[string]string{
 						"xxx": "yyy",
@@ -183,7 +186,7 @@ func Test_calculateResourceThresholdCfgMerged(t *testing.T) {
 			ResourceThresholdStrategy: expectTestingResourceThresholdCfg1.ClusterStrategy.DeepCopy(),
 		},
 		{
-			NodeCfgProfile: extension.NodeCfgProfile{
+			NodeCfgProfile: configuration.NodeCfgProfile{
 				NodeSelector: &metav1.LabelSelector{
 					MatchLabels: map[string]string{
 						"zzz": "zzz",
@@ -202,7 +205,7 @@ func Test_calculateResourceThresholdCfgMerged(t *testing.T) {
 	tests := []struct {
 		name    string
 		args    args
-		want    *extension.ResourceThresholdCfg
+		want    *configuration.ResourceThresholdCfg
 		wantErr bool
 	}{
 		{
@@ -218,7 +221,7 @@ func Test_calculateResourceThresholdCfgMerged(t *testing.T) {
 			args: args{
 				configMap: &corev1.ConfigMap{
 					Data: map[string]string{
-						extension.ResourceThresholdConfigKey: "invalid_content",
+						configuration.ResourceThresholdConfigKey: "invalid_content",
 					},
 				},
 			},
@@ -230,7 +233,7 @@ func Test_calculateResourceThresholdCfgMerged(t *testing.T) {
 			args: args{
 				configMap: &corev1.ConfigMap{
 					Data: map[string]string{
-						extension.ResourceThresholdConfigKey: string(testingResourceThresholdCfgStr),
+						configuration.ResourceThresholdConfigKey: string(testingResourceThresholdCfgStr),
 					},
 				},
 			},
@@ -246,7 +249,7 @@ func Test_calculateResourceThresholdCfgMerged(t *testing.T) {
 						Namespace: sloconfig.ConfigNameSpace,
 					},
 					Data: map[string]string{
-						extension.ResourceThresholdConfigKey: string(testingResourceThresholdCfg1Str),
+						configuration.ResourceThresholdConfigKey: string(testingResourceThresholdCfg1Str),
 					},
 				},
 			},
@@ -265,7 +268,7 @@ func Test_calculateResourceThresholdCfgMerged(t *testing.T) {
 
 func Test_getResourceQOSSpec(t *testing.T) {
 	defaultSLOCfg := DefaultSLOCfg()
-	testingResourceQOSCfg := &extension.ResourceQOSCfg{
+	testingResourceQOSCfg := &configuration.ResourceQOSCfg{
 		ClusterStrategy: &slov1alpha1.ResourceQOSStrategy{
 			BEClass: &slov1alpha1.ResourceQOS{
 				CPUQOS: &slov1alpha1.CPUQOSCfg{
@@ -276,7 +279,7 @@ func Test_getResourceQOSSpec(t *testing.T) {
 			},
 		},
 	}
-	testingResourceQOSCfg1 := &extension.ResourceQOSCfg{
+	testingResourceQOSCfg1 := &configuration.ResourceQOSCfg{
 		ClusterStrategy: &slov1alpha1.ResourceQOSStrategy{
 			BEClass: &slov1alpha1.ResourceQOS{
 				CPUQOS: &slov1alpha1.CPUQOSCfg{
@@ -286,9 +289,9 @@ func Test_getResourceQOSSpec(t *testing.T) {
 				},
 			},
 		},
-		NodeStrategies: []extension.NodeResourceQOSStrategy{
+		NodeStrategies: []configuration.NodeResourceQOSStrategy{
 			{
-				NodeCfgProfile: extension.NodeCfgProfile{
+				NodeCfgProfile: configuration.NodeCfgProfile{
 					NodeSelector: &metav1.LabelSelector{
 						MatchLabels: map[string]string{
 							"xxx": "yyy",
@@ -306,7 +309,7 @@ func Test_getResourceQOSSpec(t *testing.T) {
 				},
 			},
 			{
-				NodeCfgProfile: extension.NodeCfgProfile{
+				NodeCfgProfile: configuration.NodeCfgProfile{
 					NodeSelector: &metav1.LabelSelector{
 						MatchLabels: map[string]string{
 							"zzz": "zzz",
@@ -327,7 +330,7 @@ func Test_getResourceQOSSpec(t *testing.T) {
 	}
 	type args struct {
 		node *corev1.Node
-		cfg  *extension.ResourceQOSCfg
+		cfg  *configuration.ResourceQOSCfg
 	}
 	tests := []struct {
 		name    string
@@ -398,7 +401,7 @@ func Test_getResourceQOSSpec(t *testing.T) {
 
 func Test_calculateResourceQOSCfgMerged(t *testing.T) {
 	defaultSLOCfg := DefaultSLOCfg().ResourceQOSCfgMerged
-	oldSLOConfig := &extension.ResourceQOSCfg{
+	oldSLOConfig := &configuration.ResourceQOSCfg{
 		ClusterStrategy: &slov1alpha1.ResourceQOSStrategy{
 			BEClass: &slov1alpha1.ResourceQOS{
 				CPUQOS: &slov1alpha1.CPUQOSCfg{
@@ -415,7 +418,7 @@ func Test_calculateResourceQOSCfgMerged(t *testing.T) {
 		},
 	}
 
-	testingOnlyCluster := &extension.ResourceQOSCfg{
+	testingOnlyCluster := &configuration.ResourceQOSCfg{
 		ClusterStrategy: &slov1alpha1.ResourceQOSStrategy{
 			BEClass: &slov1alpha1.ResourceQOS{
 				CPUQOS: &slov1alpha1.CPUQOSCfg{
@@ -429,7 +432,7 @@ func Test_calculateResourceQOSCfgMerged(t *testing.T) {
 	testingOnlyClusterStr, _ := json.Marshal(testingOnlyCluster)
 	expectTestingOnlyCluster := testingOnlyCluster.DeepCopy()
 
-	testingResourceQOSCfg1 := &extension.ResourceQOSCfg{
+	testingResourceQOSCfg1 := &configuration.ResourceQOSCfg{
 		ClusterStrategy: &slov1alpha1.ResourceQOSStrategy{
 			BEClass: &slov1alpha1.ResourceQOS{
 				CPUQOS: &slov1alpha1.CPUQOSCfg{
@@ -439,9 +442,9 @@ func Test_calculateResourceQOSCfgMerged(t *testing.T) {
 				},
 			},
 		},
-		NodeStrategies: []extension.NodeResourceQOSStrategy{
+		NodeStrategies: []configuration.NodeResourceQOSStrategy{
 			{
-				NodeCfgProfile: extension.NodeCfgProfile{
+				NodeCfgProfile: configuration.NodeCfgProfile{
 					NodeSelector: &metav1.LabelSelector{
 						MatchLabels: map[string]string{
 							"xxx": "yyy",
@@ -459,7 +462,7 @@ func Test_calculateResourceQOSCfgMerged(t *testing.T) {
 				},
 			},
 			{
-				NodeCfgProfile: extension.NodeCfgProfile{
+				NodeCfgProfile: configuration.NodeCfgProfile{
 					NodeSelector: &metav1.LabelSelector{
 						MatchLabels: map[string]string{
 							"zzz": "zzz",
@@ -489,7 +492,7 @@ func Test_calculateResourceQOSCfgMerged(t *testing.T) {
 	tests := []struct {
 		name    string
 		args    args
-		want    *extension.ResourceQOSCfg
+		want    *configuration.ResourceQOSCfg
 		wantErr bool
 	}{
 		{
@@ -505,7 +508,7 @@ func Test_calculateResourceQOSCfgMerged(t *testing.T) {
 			args: args{
 				configMap: &corev1.ConfigMap{
 					Data: map[string]string{
-						extension.ResourceQOSConfigKey: "invalid_content",
+						configuration.ResourceQOSConfigKey: "invalid_content",
 					},
 				},
 			},
@@ -521,7 +524,7 @@ func Test_calculateResourceQOSCfgMerged(t *testing.T) {
 						Namespace: sloconfig.ConfigNameSpace,
 					},
 					Data: map[string]string{
-						extension.ResourceQOSConfigKey: string(testingOnlyClusterStr),
+						configuration.ResourceQOSConfigKey: string(testingOnlyClusterStr),
 					},
 				},
 			},
@@ -536,7 +539,7 @@ func Test_calculateResourceQOSCfgMerged(t *testing.T) {
 						Namespace: sloconfig.ConfigNameSpace,
 					},
 					Data: map[string]string{
-						extension.ResourceQOSConfigKey: string(testingResourceQOSCfgStr1),
+						configuration.ResourceQOSConfigKey: string(testingResourceQOSCfgStr1),
 					},
 				},
 			},
@@ -554,22 +557,22 @@ func Test_calculateResourceQOSCfgMerged(t *testing.T) {
 
 func Test_getCPBurstConfigSpec(t *testing.T) {
 	defaultConfig := DefaultSLOCfg()
-	testingCPUBurstCfg := &extension.CPUBurstCfg{
+	testingCPUBurstCfg := &configuration.CPUBurstCfg{
 		ClusterStrategy: &slov1alpha1.CPUBurstStrategy{
 			CPUBurstConfig: slov1alpha1.CPUBurstConfig{
 				CFSQuotaBurstPeriodSeconds: pointer.Int64(120),
 			},
 		},
 	}
-	testingCPUBurstCfg1 := &extension.CPUBurstCfg{
+	testingCPUBurstCfg1 := &configuration.CPUBurstCfg{
 		ClusterStrategy: &slov1alpha1.CPUBurstStrategy{
 			CPUBurstConfig: slov1alpha1.CPUBurstConfig{
 				CPUBurstPercent: pointer.Int64(200),
 			},
 		},
-		NodeStrategies: []extension.NodeCPUBurstCfg{
+		NodeStrategies: []configuration.NodeCPUBurstCfg{
 			{
-				NodeCfgProfile: extension.NodeCfgProfile{
+				NodeCfgProfile: configuration.NodeCfgProfile{
 					NodeSelector: &metav1.LabelSelector{
 						MatchLabels: map[string]string{
 							"xxx": "yyy",
@@ -583,7 +586,7 @@ func Test_getCPBurstConfigSpec(t *testing.T) {
 				},
 			},
 			{
-				NodeCfgProfile: extension.NodeCfgProfile{
+				NodeCfgProfile: configuration.NodeCfgProfile{
 					NodeSelector: &metav1.LabelSelector{
 						MatchLabels: map[string]string{
 							"zzz": "zzz",
@@ -600,7 +603,7 @@ func Test_getCPBurstConfigSpec(t *testing.T) {
 	}
 	type args struct {
 		node *corev1.Node
-		cfg  *extension.CPUBurstCfg
+		cfg  *configuration.CPUBurstCfg
 	}
 	tests := []struct {
 		name    string
@@ -661,7 +664,7 @@ func Test_calculateCPUBurstCfgMerged(t *testing.T) {
 	oldSLOConfig := DefaultSLOCfg()
 	oldSLOConfig.CPUBurstCfgMerged.ClusterStrategy.CFSQuotaBurstPercent = pointer.Int64(30)
 
-	testingCfgClusterOnly := &extension.CPUBurstCfg{
+	testingCfgClusterOnly := &configuration.CPUBurstCfg{
 		ClusterStrategy: &slov1alpha1.CPUBurstStrategy{
 			CPUBurstConfig: slov1alpha1.CPUBurstConfig{
 				CFSQuotaBurstPeriodSeconds: pointer.Int64(120),
@@ -673,11 +676,11 @@ func Test_calculateCPUBurstCfgMerged(t *testing.T) {
 	expectTestingCfgClusterOnly := defaultSLOCfg.CPUBurstCfgMerged.DeepCopy()
 	expectTestingCfgClusterOnly.ClusterStrategy.CPUBurstConfig.CFSQuotaBurstPeriodSeconds = testingCfgClusterOnly.ClusterStrategy.CPUBurstConfig.CFSQuotaBurstPeriodSeconds
 
-	testingCPUBurstCfg1 := &extension.CPUBurstCfg{
+	testingCPUBurstCfg1 := &configuration.CPUBurstCfg{
 		ClusterStrategy: testingCfgClusterOnly.ClusterStrategy,
-		NodeStrategies: []extension.NodeCPUBurstCfg{
+		NodeStrategies: []configuration.NodeCPUBurstCfg{
 			{
-				NodeCfgProfile: extension.NodeCfgProfile{
+				NodeCfgProfile: configuration.NodeCfgProfile{
 					NodeSelector: &metav1.LabelSelector{
 						MatchLabels: map[string]string{
 							"xxx": "yyy",
@@ -691,7 +694,7 @@ func Test_calculateCPUBurstCfgMerged(t *testing.T) {
 				},
 			},
 			{
-				NodeCfgProfile: extension.NodeCfgProfile{
+				NodeCfgProfile: configuration.NodeCfgProfile{
 					NodeSelector: &metav1.LabelSelector{
 						MatchLabels: map[string]string{
 							"zzz": "zzz",
@@ -708,11 +711,11 @@ func Test_calculateCPUBurstCfgMerged(t *testing.T) {
 	}
 	testingCPUBurstCfgStr1, _ := json.Marshal(testingCPUBurstCfg1)
 
-	expectTestingCPUBurstCfg1 := &extension.CPUBurstCfg{
+	expectTestingCPUBurstCfg1 := &configuration.CPUBurstCfg{
 		ClusterStrategy: expectTestingCfgClusterOnly.ClusterStrategy.DeepCopy(),
-		NodeStrategies: []extension.NodeCPUBurstCfg{
+		NodeStrategies: []configuration.NodeCPUBurstCfg{
 			{
-				NodeCfgProfile: extension.NodeCfgProfile{
+				NodeCfgProfile: configuration.NodeCfgProfile{
 					NodeSelector: &metav1.LabelSelector{
 						MatchLabels: map[string]string{
 							"xxx": "yyy",
@@ -722,7 +725,7 @@ func Test_calculateCPUBurstCfgMerged(t *testing.T) {
 				CPUBurstStrategy: expectTestingCfgClusterOnly.ClusterStrategy.DeepCopy(),
 			},
 			{
-				NodeCfgProfile: extension.NodeCfgProfile{
+				NodeCfgProfile: configuration.NodeCfgProfile{
 					NodeSelector: &metav1.LabelSelector{
 						MatchLabels: map[string]string{
 							"zzz": "zzz",
@@ -742,7 +745,7 @@ func Test_calculateCPUBurstCfgMerged(t *testing.T) {
 	tests := []struct {
 		name    string
 		args    args
-		want    *extension.CPUBurstCfg
+		want    *configuration.CPUBurstCfg
 		wantErr bool
 	}{
 		{
@@ -758,7 +761,7 @@ func Test_calculateCPUBurstCfgMerged(t *testing.T) {
 			args: args{
 				configMap: &corev1.ConfigMap{
 					Data: map[string]string{
-						extension.CPUBurstConfigKey: "invalid_content",
+						configuration.CPUBurstConfigKey: "invalid_content",
 					},
 				},
 			},
@@ -774,7 +777,7 @@ func Test_calculateCPUBurstCfgMerged(t *testing.T) {
 						Namespace: sloconfig.ConfigNameSpace,
 					},
 					Data: map[string]string{
-						extension.CPUBurstConfigKey: string(testingCfgClusterOnlyStr),
+						configuration.CPUBurstConfigKey: string(testingCfgClusterOnlyStr),
 					},
 				},
 			},
@@ -789,7 +792,7 @@ func Test_calculateCPUBurstCfgMerged(t *testing.T) {
 						Namespace: sloconfig.ConfigNameSpace,
 					},
 					Data: map[string]string{
-						extension.CPUBurstConfigKey: string(testingCPUBurstCfgStr1),
+						configuration.CPUBurstConfigKey: string(testingCPUBurstCfgStr1),
 					},
 				},
 			},
@@ -807,18 +810,18 @@ func Test_calculateCPUBurstCfgMerged(t *testing.T) {
 
 func Test_getSystemConfigSpec(t *testing.T) {
 	defaultConfig := DefaultSLOCfg()
-	testingSystemConfig := &extension.SystemCfg{
+	testingSystemConfig := &configuration.SystemCfg{
 		ClusterStrategy: &slov1alpha1.SystemStrategy{
 			MinFreeKbytesFactor: pointer.Int64(150),
 		},
 	}
-	testingSystemConfig1 := &extension.SystemCfg{
+	testingSystemConfig1 := &configuration.SystemCfg{
 		ClusterStrategy: &slov1alpha1.SystemStrategy{
 			MinFreeKbytesFactor: pointer.Int64(150),
 		},
-		NodeStrategies: []extension.NodeSystemStrategy{
+		NodeStrategies: []configuration.NodeSystemStrategy{
 			{
-				NodeCfgProfile: extension.NodeCfgProfile{
+				NodeCfgProfile: configuration.NodeCfgProfile{
 					NodeSelector: &metav1.LabelSelector{
 						MatchLabels: map[string]string{
 							"xxx": "yyy",
@@ -830,7 +833,7 @@ func Test_getSystemConfigSpec(t *testing.T) {
 				},
 			},
 			{
-				NodeCfgProfile: extension.NodeCfgProfile{
+				NodeCfgProfile: configuration.NodeCfgProfile{
 					NodeSelector: &metav1.LabelSelector{
 						MatchLabels: map[string]string{
 							"zzz": "zzz",
@@ -845,7 +848,7 @@ func Test_getSystemConfigSpec(t *testing.T) {
 	}
 	type args struct {
 		node *corev1.Node
-		cfg  *extension.SystemCfg
+		cfg  *configuration.SystemCfg
 	}
 	tests := []struct {
 		name    string
@@ -921,7 +924,7 @@ func Test_calculateSystemConfigMerged(t *testing.T) {
 	oldSLOCfg := DefaultSLOCfg()
 	oldSLOCfg.SystemCfgMerged.ClusterStrategy.WatermarkScaleFactor = pointer.Int64(99)
 
-	testingCfgOnliCluster := &extension.SystemCfg{
+	testingCfgOnliCluster := &configuration.SystemCfg{
 		ClusterStrategy: &slov1alpha1.SystemStrategy{
 			WatermarkScaleFactor: pointer.Int64(151),
 			MemcgReapBackGround:  pointer.Int64(1),
@@ -932,13 +935,13 @@ func Test_calculateSystemConfigMerged(t *testing.T) {
 	expectTestingCfgOnlyCluster.ClusterStrategy.WatermarkScaleFactor = testingCfgOnliCluster.ClusterStrategy.WatermarkScaleFactor
 	expectTestingCfgOnlyCluster.ClusterStrategy.MemcgReapBackGround = testingCfgOnliCluster.ClusterStrategy.MemcgReapBackGround
 
-	testingSystemConfig1 := &extension.SystemCfg{
+	testingSystemConfig1 := &configuration.SystemCfg{
 		ClusterStrategy: &slov1alpha1.SystemStrategy{
 			WatermarkScaleFactor: pointer.Int64(151),
 		},
-		NodeStrategies: []extension.NodeSystemStrategy{
+		NodeStrategies: []configuration.NodeSystemStrategy{
 			{
-				NodeCfgProfile: extension.NodeCfgProfile{
+				NodeCfgProfile: configuration.NodeCfgProfile{
 					NodeSelector: &metav1.LabelSelector{
 						MatchLabels: map[string]string{
 							"xxx": "yyy",
@@ -951,7 +954,7 @@ func Test_calculateSystemConfigMerged(t *testing.T) {
 				},
 			},
 			{
-				NodeCfgProfile: extension.NodeCfgProfile{
+				NodeCfgProfile: configuration.NodeCfgProfile{
 					NodeSelector: &metav1.LabelSelector{
 						MatchLabels: map[string]string{
 							"zzz": "zzz",
@@ -966,16 +969,16 @@ func Test_calculateSystemConfigMerged(t *testing.T) {
 		},
 	}
 	testingSystemConfig1Str, _ := json.Marshal(testingSystemConfig1)
-	expectTestingSystemConfig1 := &extension.SystemCfg{
+	expectTestingSystemConfig1 := &configuration.SystemCfg{
 		ClusterStrategy: &slov1alpha1.SystemStrategy{
-			MinFreeKbytesFactor:  oldSLOCfg.SystemCfgMerged.ClusterStrategy.MinFreeKbytesFactor,
-			WatermarkScaleFactor: pointer.Int64(151),
-			MemcgReapBackGround:  oldSLOCfg.SystemCfgMerged.ClusterStrategy.MemcgReapBackGround,
+			MinFreeKbytesFactor:   oldSLOCfg.SystemCfgMerged.ClusterStrategy.MinFreeKbytesFactor,
+			WatermarkScaleFactor:  pointer.Int64(151),
+			MemcgReapBackGround:   oldSLOCfg.SystemCfgMerged.ClusterStrategy.MemcgReapBackGround,
+			TotalNetworkBandwidth: resource.MustParse("0"),
 		},
-		NodeStrategies: []extension.NodeSystemStrategy{
+		NodeStrategies: []configuration.NodeSystemStrategy{
 			{
-
-				NodeCfgProfile: extension.NodeCfgProfile{
+				NodeCfgProfile: configuration.NodeCfgProfile{
 					NodeSelector: &metav1.LabelSelector{
 						MatchLabels: map[string]string{
 							"xxx": "yyy",
@@ -983,12 +986,13 @@ func Test_calculateSystemConfigMerged(t *testing.T) {
 					},
 				},
 				SystemStrategy: &slov1alpha1.SystemStrategy{
-					MinFreeKbytesFactor:  pointer.Int64(130),
-					WatermarkScaleFactor: pointer.Int64(151),
-					MemcgReapBackGround:  pointer.Int64(1),
+					MinFreeKbytesFactor:   pointer.Int64(130),
+					WatermarkScaleFactor:  pointer.Int64(151),
+					MemcgReapBackGround:   pointer.Int64(1),
+					TotalNetworkBandwidth: resource.MustParse("0"),
 				},
 			},
-			{NodeCfgProfile: extension.NodeCfgProfile{
+			{NodeCfgProfile: configuration.NodeCfgProfile{
 				NodeSelector: &metav1.LabelSelector{
 					MatchLabels: map[string]string{
 						"zzz": "zzz",
@@ -996,9 +1000,10 @@ func Test_calculateSystemConfigMerged(t *testing.T) {
 				},
 			},
 				SystemStrategy: &slov1alpha1.SystemStrategy{
-					MinFreeKbytesFactor:  pointer.Int64(140),
-					WatermarkScaleFactor: pointer.Int64(151),
-					MemcgReapBackGround:  pointer.Int64(0),
+					MinFreeKbytesFactor:   pointer.Int64(140),
+					WatermarkScaleFactor:  pointer.Int64(151),
+					MemcgReapBackGround:   pointer.Int64(0),
+					TotalNetworkBandwidth: resource.MustParse("0"),
 				},
 			},
 		},
@@ -1010,7 +1015,7 @@ func Test_calculateSystemConfigMerged(t *testing.T) {
 	tests := []struct {
 		name    string
 		args    args
-		want    *extension.SystemCfg
+		want    *configuration.SystemCfg
 		wantErr bool
 	}{
 		{
@@ -1026,7 +1031,7 @@ func Test_calculateSystemConfigMerged(t *testing.T) {
 			args: args{
 				configMap: &corev1.ConfigMap{
 					Data: map[string]string{
-						extension.SystemConfigKey: "invalid_content",
+						configuration.SystemConfigKey: "invalid_content",
 					},
 				},
 			},
@@ -1042,7 +1047,7 @@ func Test_calculateSystemConfigMerged(t *testing.T) {
 						Namespace: sloconfig.ConfigNameSpace,
 					},
 					Data: map[string]string{
-						extension.SystemConfigKey: string(testingCfgOnliClusterStr),
+						configuration.SystemConfigKey: string(testingCfgOnliClusterStr),
 					},
 				},
 			},
@@ -1057,7 +1062,7 @@ func Test_calculateSystemConfigMerged(t *testing.T) {
 						Namespace: sloconfig.ConfigNameSpace,
 					},
 					Data: map[string]string{
-						extension.SystemConfigKey: string(testingSystemConfig1Str),
+						configuration.SystemConfigKey: string(testingSystemConfig1Str),
 					},
 				},
 			},
@@ -1069,6 +1074,210 @@ func Test_calculateSystemConfigMerged(t *testing.T) {
 			got, gotErr := calculateSystemConfigMerged(oldSLOCfg.SystemCfgMerged, tt.args.configMap)
 			assert.Equal(t, tt.wantErr, gotErr != nil)
 			assert.Equal(t, tt.want, &got)
+		})
+	}
+}
+
+func Test_getHostApplicationConfig(t *testing.T) {
+	type args struct {
+		node *corev1.Node
+		cfg  *configuration.HostApplicationCfg
+	}
+	testHostApp := &configuration.HostApplicationCfg{
+		Applications: []slov1alpha1.HostApplicationSpec{
+			{
+				Name: "test-app-default",
+			},
+		},
+		NodeConfigs: []configuration.NodeHostApplicationCfg{
+			{
+				NodeCfgProfile: configuration.NodeCfgProfile{
+					NodeSelector: &metav1.LabelSelector{
+						MatchLabels: map[string]string{
+							"test-node-key": "test-node-value-A",
+						},
+					},
+				},
+				Applications: []slov1alpha1.HostApplicationSpec{
+					{
+						Name: "test-app-ls",
+						QoS:  ext.QoSLS,
+					},
+				},
+			},
+		},
+	}
+	testHostAppMultiNodes := &configuration.HostApplicationCfg{
+		Applications: []slov1alpha1.HostApplicationSpec{
+			{
+				Name: "test-app-default",
+			},
+		},
+		NodeConfigs: []configuration.NodeHostApplicationCfg{
+			{
+				NodeCfgProfile: configuration.NodeCfgProfile{
+					NodeSelector: &metav1.LabelSelector{
+						MatchLabels: map[string]string{
+							"test-node-key-A": "test-node-value-A",
+						},
+					},
+				},
+				Applications: []slov1alpha1.HostApplicationSpec{
+					{
+						Name: "test-app-ls",
+						QoS:  ext.QoSLS,
+					},
+				},
+			},
+			{
+				NodeCfgProfile: configuration.NodeCfgProfile{
+					NodeSelector: &metav1.LabelSelector{
+						MatchLabels: map[string]string{
+							"test-node-key-B": "test-node-value-B",
+						},
+					},
+				},
+				Applications: []slov1alpha1.HostApplicationSpec{
+					{
+						Name: "test-app-lsr",
+						QoS:  ext.QoSLSR,
+					},
+				},
+			},
+		},
+	}
+	tests := []struct {
+		name    string
+		args    args
+		want    []slov1alpha1.HostApplicationSpec
+		wantErr bool
+	}{
+		{
+			name: "invalid node, use cluster config",
+			args: args{
+				node: &corev1.Node{},
+				cfg:  testHostApp,
+			},
+			want:    testHostApp.Applications,
+			wantErr: false,
+		},
+		{
+			name: "use cluster config",
+			args: args{
+				node: &corev1.Node{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "test-node",
+					},
+				},
+				cfg: testHostApp,
+			},
+			want:    testHostApp.Applications,
+			wantErr: false,
+		},
+		{
+			name: "use first matched node config",
+			args: args{
+				node: &corev1.Node{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "test-node",
+						Labels: map[string]string{
+							"test-node-key-A": "test-node-value-A",
+							"test-node-key-B": "test-node-value-B",
+						},
+					},
+				},
+				cfg: testHostAppMultiNodes,
+			},
+			want:    testHostAppMultiNodes.NodeConfigs[0].Applications,
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := getHostApplicationConfig(tt.args.node, tt.args.cfg)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("getHostApplicationConfig() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("getHostApplicationConfig() got = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_calculateHostAppConfigMerged(t *testing.T) {
+	hostAppOrigin := configuration.HostApplicationCfg{
+		Applications: []slov1alpha1.HostApplicationSpec{
+			{
+				Name: "origin-host-app",
+				QoS:  ext.QoSLS,
+			},
+		},
+	}
+	hostAppNew := configuration.HostApplicationCfg{
+		Applications: []slov1alpha1.HostApplicationSpec{
+			{
+				Name: "new-host-app",
+				QoS:  ext.QoSLS,
+			},
+		},
+	}
+	hostAppNewBytes, _ := json.Marshal(&hostAppNew)
+	hostAppNewStr := string(hostAppNewBytes)
+	hostAppBadStr := "bad-string"
+	type args struct {
+		oldCfg    configuration.HostApplicationCfg
+		configMap *corev1.ConfigMap
+	}
+	tests := []struct {
+		name    string
+		args    args
+		want    configuration.HostApplicationCfg
+		wantErr bool
+	}{
+		{
+			name: "configmap key not exist, use empty",
+			args: args{
+				oldCfg:    hostAppOrigin,
+				configMap: &corev1.ConfigMap{Data: map[string]string{}},
+			},
+			want:    configuration.HostApplicationCfg{},
+			wantErr: false,
+		},
+		{
+			name: "bad configmap key, use old",
+			args: args{
+				oldCfg: hostAppOrigin,
+				configMap: &corev1.ConfigMap{Data: map[string]string{
+					configuration.HostApplicationConfigKey: hostAppBadStr,
+				}},
+			},
+			want:    hostAppOrigin,
+			wantErr: true,
+		},
+		{
+			name: "parse from new host application",
+			args: args{
+				oldCfg: hostAppOrigin,
+				configMap: &corev1.ConfigMap{Data: map[string]string{
+					configuration.HostApplicationConfigKey: hostAppNewStr,
+				}},
+			},
+			want:    hostAppNew,
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := calculateHostAppConfigMerged(tt.args.oldCfg, tt.args.configMap)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("calculateHostAppConfigMerged() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("calculateHostAppConfigMerged() got = %v, want %v", got, tt.want)
+			}
 		})
 	}
 }

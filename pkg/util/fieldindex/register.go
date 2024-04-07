@@ -24,6 +24,9 @@ import (
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	apiv1alpha1 "sigs.k8s.io/scheduler-plugins/pkg/apis/scheduling/v1alpha1"
+
+	"github.com/koordinator-sh/koordinator/apis/extension"
 )
 
 var registerOnce sync.Once
@@ -50,6 +53,48 @@ var indexDescriptors = []fieldIndexDescriptor{
 				return []string{}
 			}
 			return []string{pod.Spec.NodeName}
+		},
+	},
+	{
+		description: "index pod by label.QuotaName",
+		obj:         &corev1.Pod{},
+		field:       "label.quotaName",
+		indexerFunc: func(obj client.Object) []string {
+			pod, ok := obj.(*corev1.Pod)
+			if !ok {
+				return []string{}
+			}
+			if len(pod.Labels) == 0 || pod.Labels[extension.LabelQuotaName] == "" {
+				return []string{}
+			}
+			return []string{pod.Labels[extension.LabelQuotaName]}
+		},
+	},
+	{
+		description: "index elastic quota by annotation.namespaces",
+		obj:         &apiv1alpha1.ElasticQuota{},
+		field:       "annotation.namespaces",
+		indexerFunc: func(obj client.Object) []string {
+			eq, ok := obj.(*apiv1alpha1.ElasticQuota)
+			if !ok {
+				return []string{}
+			}
+			if len(eq.Annotations) == 0 || eq.Annotations[extension.AnnotationQuotaNamespaces] == "" {
+				return []string{}
+			}
+			return extension.GetAnnotationQuotaNamespaces(eq)
+		},
+	},
+	{
+		description: "index elastic quota by name",
+		obj:         &apiv1alpha1.ElasticQuota{},
+		field:       "metadata.name",
+		indexerFunc: func(obj client.Object) []string {
+			eq, ok := obj.(*apiv1alpha1.ElasticQuota)
+			if !ok {
+				return []string{}
+			}
+			return []string{eq.Name}
 		},
 	},
 }

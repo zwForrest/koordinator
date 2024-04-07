@@ -38,8 +38,7 @@ func TestQuotaOverUsedGroupMonitor_Monitor(t *testing.T) {
 	gqm := pg.groupQuotaManager
 	gqm.UpdateClusterTotalResource(createResourceList(100, 1000))
 	gqm.RefreshRuntime("test1")
-	quotaOverUsedRevokeController := NewQuotaOverUsedRevokeController(pg.handle.ClientSet(), pg.pluginArgs.DelayEvictTime.Duration,
-		pg.pluginArgs.RevokePodInterval.Duration, pg.groupQuotaManager, *pg.pluginArgs.MonitorAllQuotas)
+	quotaOverUsedRevokeController := NewQuotaOverUsedRevokeController(pg)
 	quotaOverUsedRevokeController.syncQuota()
 	monitor := quotaOverUsedRevokeController.monitors["test1"]
 	var pod *corev1.Pod
@@ -105,14 +104,14 @@ func TestQuotaOverUsedRevokeController_GetToRevokePodList(t *testing.T) {
 	qi.Lock()
 	qi.CalculateInfo.Runtime = createResourceList(50, 0)
 	qi.UnLock()
-	con := NewQuotaOverUsedRevokeController(plugin.handle.ClientSet(), plugin.pluginArgs.DelayEvictTime.Duration,
-		plugin.pluginArgs.RevokePodInterval.Duration, plugin.groupQuotaManager, *plugin.pluginArgs.MonitorAllQuotas)
+	con := NewQuotaOverUsedRevokeController(plugin)
 	con.syncQuota()
 	quotaInfo := gqm.GetQuotaInfoByName("test1")
-	pod1 := defaultCreatePod("1", 10, 30, 0)
+	pod1 := defaultCreatePod("1", 10, 20, 0)
 	pod2 := defaultCreatePod("2", 9, 10, 1)
 	pod3 := defaultCreatePod("3", 8, 20, 0)
 	pod4 := defaultCreatePod("4", 7, 40, 0)
+	defaultCreatePodWithQuotaAndNonPreemptible("5", "test1", 1, 10, 0, true)
 	gqm.OnPodAdd("test1", pod1)
 	gqm.OnPodAdd("test1", pod2)
 	gqm.OnPodAdd("test1", pod3)
@@ -122,7 +121,7 @@ func TestQuotaOverUsedRevokeController_GetToRevokePodList(t *testing.T) {
 	if len(result) != 2 {
 		t.Errorf("error:%v", len(result))
 	}
-	if result[0].Name != "2" || result[1].Name != "4" {
+	if result[0].Name == "5" || result[0].Name != "2" || result[1].Name != "4" {
 		t.Errorf("error")
 	}
 	qi.Lock()
@@ -145,10 +144,12 @@ func TestQuotaOverUsedRevokeController_GetToMonitorQuotas(t *testing.T) {
 	suit := newPluginTestSuit(t, nil)
 	p, _ := suit.proxyNew(suit.elasticQuotaArgs, suit.Handle)
 	plugin := p.(*Plugin)
+	plugin.pluginArgs.DelayEvictTime.Duration = 0 * time.Second
+	plugin.pluginArgs.MonitorAllQuotas = true
+
 	gqm := plugin.groupQuotaManager
 	gqm.UpdateClusterTotalResource(createResourceList(10850060000, 0))
-	cc := NewQuotaOverUsedRevokeController(plugin.handle.ClientSet(), 0*time.Second,
-		plugin.pluginArgs.RevokePodInterval.Duration, plugin.groupQuotaManager, true)
+	cc := NewQuotaOverUsedRevokeController(plugin)
 
 	suit.AddQuota("test1", extension.RootQuotaName, 4797411900, 0, 1085006000, 0, 4797411900, 0, true, "extended")
 	suit.AddQuota("test2", extension.RootQuotaName, 4797411900, 0, 1085006000, 0, 4797411900, 0, true, "extended")

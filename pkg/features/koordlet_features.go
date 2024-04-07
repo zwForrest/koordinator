@@ -46,6 +46,13 @@ const (
 	BECPUSuppress featuregate.Feature = "BECPUSuppress"
 
 	// owner: @zwzhang0107 @saintube
+	// alpha: v1.4
+	//
+	// BECPUManager manages cpuset of best-effort pod, this feature cannot work with BECPUSuppress together
+	// TODO use BECPUManager to replace BECPUSuppress for advanced cpu management for be pods
+	BECPUManager featuregate.Feature = "BECPUManager"
+
+	// owner: @zwzhang0107 @saintube
 	// alpha: v0.4
 	//
 	// BECPUEvict evicts best-effort pod when they lack of resource.
@@ -103,6 +110,12 @@ const (
 	// CPICollector enables cpi collector feature of koordlet.
 	CPICollector featuregate.Feature = "CPICollector"
 
+	// owner: @bowen-intel
+	// alpha: v0.1
+	//
+	// Libpfm4 enables libpfm4 feature of koordlet.
+	Libpfm4 featuregate.Feature = "Libpfm4"
+
 	// owner: @songtao98 @zwzhang0107
 	// alpha: v1.0
 	//
@@ -114,6 +127,20 @@ const (
 	//
 	// BlkIOReconcile enables block I/O QoS feature of koordlet.
 	BlkIOReconcile featuregate.Feature = "BlkIOReconcile"
+
+	// owner: @BUPT-wxq
+	// alpha v1.4
+	//
+	// ColdPageCollector enables coldPageCollector feature of koordlet.
+	ColdPageCollector featuregate.Feature = "ColdPageCollector"
+
+	// HugePageReport enables hugepage collector feature of koordlet.
+	// This feature supports reporting of hugepages.
+	// The koord-scheduler will allocate hugepage information based on the user's hugepage request and add it to the Pod's annotations.
+	// Format: scheduling.koordinator.sh/resource-status: '{"numaNodeResources":[{"node":1,"resources":{"hugepages-1Gi":"50Gi"}}]}'.
+	// Backend applications can enable the hugepages based on the allocation results.
+	// For example, the CSI mounts the pre-allocated hugepages into the pod.
+	HugePageReport featuregate.Feature = "HugePageReport"
 )
 
 func init() {
@@ -128,6 +155,7 @@ var (
 		AuditEvents:            {Default: false, PreRelease: featuregate.Alpha},
 		AuditEventsHTTPHandler: {Default: false, PreRelease: featuregate.Alpha},
 		BECPUSuppress:          {Default: true, PreRelease: featuregate.Beta},
+		BECPUManager:           {Default: false, PreRelease: featuregate.Alpha},
 		BECPUEvict:             {Default: false, PreRelease: featuregate.Alpha},
 		BEMemoryEvict:          {Default: false, PreRelease: featuregate.Alpha},
 		CPUBurst:               {Default: true, PreRelease: featuregate.Beta},
@@ -137,14 +165,17 @@ var (
 		NodeTopologyReport:     {Default: true, PreRelease: featuregate.Beta},
 		Accelerators:           {Default: false, PreRelease: featuregate.Alpha},
 		CPICollector:           {Default: false, PreRelease: featuregate.Alpha},
+		Libpfm4:                {Default: false, PreRelease: featuregate.Alpha},
 		PSICollector:           {Default: false, PreRelease: featuregate.Alpha},
 		BlkIOReconcile:         {Default: false, PreRelease: featuregate.Alpha},
+		ColdPageCollector:      {Default: false, PreRelease: featuregate.Alpha},
+		HugePageReport:         {Default: false, PreRelease: featuregate.Alpha},
 	}
 )
 
 // IsFeatureDisabled returns whether the featuregate is disabled by nodeSLO config
 func IsFeatureDisabled(nodeSLO *slov1alpha1.NodeSLO, feature featuregate.Feature) (bool, error) {
-	if nodeSLO == nil || nodeSLO.Spec == (slov1alpha1.NodeSLOSpec{}) {
+	if nodeSLO == nil {
 		return true, fmt.Errorf("cannot parse feature config for invalid nodeSLO %v", nodeSLO)
 	}
 

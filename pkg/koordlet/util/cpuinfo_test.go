@@ -20,6 +20,11 @@ import (
 	"reflect"
 	"runtime"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+
+	"github.com/koordinator-sh/koordinator/apis/extension"
+	"github.com/koordinator-sh/koordinator/pkg/koordlet/util/system"
 )
 
 func Test_getProcessorInfos(t *testing.T) {
@@ -54,7 +59,7 @@ CPU NODE SOCKET CORE L1d:L1i:L2:L3 ONLINE
 			args: args{
 				lsCPUStr: `
 CPU NODE SOCKET CORE L1d:L1i:L2:L3 ONLINE
-0   0    0      0    -             yes
+0   0    0      0    no cacheinfo  yes
 1   0    0      0    no cacheinfo  yes
 `},
 			want:    nil,
@@ -382,7 +387,7 @@ CPU NODE SOCKET CORE L1d:L1i:L2:L3 ONLINE
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := getProcessorInfos(tt.args.lsCPUStr)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("getProcessorInfos wantErr %v but got err %s", tt.wantErr, err)
+				t.Errorf("getProcessorInfos wantErr %v but got err %v", tt.wantErr, err)
 			}
 			if !reflect.DeepEqual(tt.want, got) {
 				t.Errorf("getProcessorInfos want %v but got %v", tt.want, got)
@@ -411,11 +416,51 @@ func Test_calculateCPUTotalInfo(t *testing.T) {
 				{CPUID: 11, CoreID: 5, SocketID: 0, NodeID: 0},
 			}},
 			want: &CPUTotalInfo{
-				NumberCPUs:    6,
-				NumberCores:   3,
-				NumberSockets: 1,
-				NumberNodes:   1,
-				NumberL3s:     1,
+				NumberCPUs: 6,
+				CoreToCPU: map[int32][]ProcessorInfo{
+					3: {
+						{CPUID: 6, CoreID: 3, SocketID: 0, NodeID: 0},
+						{CPUID: 7, CoreID: 3, SocketID: 0, NodeID: 0},
+					},
+					4: {
+						{CPUID: 8, CoreID: 4, SocketID: 0, NodeID: 0},
+						{CPUID: 9, CoreID: 4, SocketID: 0, NodeID: 0},
+					},
+					5: {
+						{CPUID: 10, CoreID: 5, SocketID: 0, NodeID: 0},
+						{CPUID: 11, CoreID: 5, SocketID: 0, NodeID: 0},
+					},
+				},
+				NodeToCPU: map[int32][]ProcessorInfo{
+					0: {
+						{CPUID: 6, CoreID: 3, SocketID: 0, NodeID: 0},
+						{CPUID: 7, CoreID: 3, SocketID: 0, NodeID: 0},
+						{CPUID: 8, CoreID: 4, SocketID: 0, NodeID: 0},
+						{CPUID: 9, CoreID: 4, SocketID: 0, NodeID: 0},
+						{CPUID: 10, CoreID: 5, SocketID: 0, NodeID: 0},
+						{CPUID: 11, CoreID: 5, SocketID: 0, NodeID: 0},
+					},
+				},
+				SocketToCPU: map[int32][]ProcessorInfo{
+					0: {
+						{CPUID: 6, CoreID: 3, SocketID: 0, NodeID: 0},
+						{CPUID: 7, CoreID: 3, SocketID: 0, NodeID: 0},
+						{CPUID: 8, CoreID: 4, SocketID: 0, NodeID: 0},
+						{CPUID: 9, CoreID: 4, SocketID: 0, NodeID: 0},
+						{CPUID: 10, CoreID: 5, SocketID: 0, NodeID: 0},
+						{CPUID: 11, CoreID: 5, SocketID: 0, NodeID: 0},
+					},
+				},
+				L3ToCPU: map[int32][]ProcessorInfo{
+					0: {
+						{CPUID: 6, CoreID: 3, SocketID: 0, NodeID: 0},
+						{CPUID: 7, CoreID: 3, SocketID: 0, NodeID: 0},
+						{CPUID: 8, CoreID: 4, SocketID: 0, NodeID: 0},
+						{CPUID: 9, CoreID: 4, SocketID: 0, NodeID: 0},
+						{CPUID: 10, CoreID: 5, SocketID: 0, NodeID: 0},
+						{CPUID: 11, CoreID: 5, SocketID: 0, NodeID: 0},
+					},
+				},
 			},
 		},
 		{
@@ -431,11 +476,61 @@ func Test_calculateCPUTotalInfo(t *testing.T) {
 				{CPUID: 7, CoreID: 7, SocketID: 3, NodeID: 1},
 			}},
 			want: &CPUTotalInfo{
-				NumberCPUs:    8,
-				NumberCores:   8,
-				NumberSockets: 4,
-				NumberNodes:   2,
-				NumberL3s:     1,
+				NumberCPUs: 8,
+				CoreToCPU: map[int32][]ProcessorInfo{
+					0: {{CPUID: 0, CoreID: 0, SocketID: 0, NodeID: 0}},
+					1: {{CPUID: 1, CoreID: 1, SocketID: 0, NodeID: 0}},
+					2: {{CPUID: 2, CoreID: 2, SocketID: 1, NodeID: 0}},
+					3: {{CPUID: 3, CoreID: 3, SocketID: 1, NodeID: 0}},
+					4: {{CPUID: 4, CoreID: 4, SocketID: 2, NodeID: 1}},
+					5: {{CPUID: 5, CoreID: 5, SocketID: 2, NodeID: 1}},
+					6: {{CPUID: 6, CoreID: 6, SocketID: 3, NodeID: 1}},
+					7: {{CPUID: 7, CoreID: 7, SocketID: 3, NodeID: 1}},
+				},
+				NodeToCPU: map[int32][]ProcessorInfo{
+					0: {
+						{CPUID: 0, CoreID: 0, SocketID: 0, NodeID: 0},
+						{CPUID: 1, CoreID: 1, SocketID: 0, NodeID: 0},
+						{CPUID: 2, CoreID: 2, SocketID: 1, NodeID: 0},
+						{CPUID: 3, CoreID: 3, SocketID: 1, NodeID: 0},
+					},
+					1: {
+						{CPUID: 4, CoreID: 4, SocketID: 2, NodeID: 1},
+						{CPUID: 5, CoreID: 5, SocketID: 2, NodeID: 1},
+						{CPUID: 6, CoreID: 6, SocketID: 3, NodeID: 1},
+						{CPUID: 7, CoreID: 7, SocketID: 3, NodeID: 1},
+					},
+				},
+				SocketToCPU: map[int32][]ProcessorInfo{
+					0: {
+						{CPUID: 0, CoreID: 0, SocketID: 0, NodeID: 0},
+						{CPUID: 1, CoreID: 1, SocketID: 0, NodeID: 0},
+					},
+					1: {
+						{CPUID: 2, CoreID: 2, SocketID: 1, NodeID: 0},
+						{CPUID: 3, CoreID: 3, SocketID: 1, NodeID: 0},
+					},
+					2: {
+						{CPUID: 4, CoreID: 4, SocketID: 2, NodeID: 1},
+						{CPUID: 5, CoreID: 5, SocketID: 2, NodeID: 1},
+					},
+					3: {
+						{CPUID: 6, CoreID: 6, SocketID: 3, NodeID: 1},
+						{CPUID: 7, CoreID: 7, SocketID: 3, NodeID: 1},
+					},
+				},
+				L3ToCPU: map[int32][]ProcessorInfo{
+					0: {
+						{CPUID: 0, CoreID: 0, SocketID: 0, NodeID: 0},
+						{CPUID: 1, CoreID: 1, SocketID: 0, NodeID: 0},
+						{CPUID: 2, CoreID: 2, SocketID: 1, NodeID: 0},
+						{CPUID: 3, CoreID: 3, SocketID: 1, NodeID: 0},
+						{CPUID: 4, CoreID: 4, SocketID: 2, NodeID: 1},
+						{CPUID: 5, CoreID: 5, SocketID: 2, NodeID: 1},
+						{CPUID: 6, CoreID: 6, SocketID: 3, NodeID: 1},
+						{CPUID: 7, CoreID: 7, SocketID: 3, NodeID: 1},
+					},
+				},
 			},
 		},
 		{
@@ -443,28 +538,74 @@ func Test_calculateCPUTotalInfo(t *testing.T) {
 			args: args{processorInfos: []ProcessorInfo{
 				{CPUID: 0, CoreID: 0, SocketID: 0, NodeID: 0, L3: 0},
 				{CPUID: 1, CoreID: 1, SocketID: 0, NodeID: 0, L3: 0},
-				{CPUID: 2, CoreID: 2, SocketID: 1, NodeID: 0, L3: 0},
-				{CPUID: 3, CoreID: 3, SocketID: 1, NodeID: 0, L3: 0},
-				{CPUID: 4, CoreID: 4, SocketID: 2, NodeID: 1, L3: 1},
-				{CPUID: 5, CoreID: 5, SocketID: 2, NodeID: 1, L3: 1},
-				{CPUID: 6, CoreID: 6, SocketID: 3, NodeID: 1, L3: 1},
-				{CPUID: 7, CoreID: 7, SocketID: 3, NodeID: 1, L3: 1},
+				{CPUID: 2, CoreID: 2, SocketID: 0, NodeID: 0, L3: 0},
+				{CPUID: 3, CoreID: 3, SocketID: 0, NodeID: 0, L3: 0},
+				{CPUID: 4, CoreID: 4, SocketID: 1, NodeID: 1, L3: 1},
+				{CPUID: 5, CoreID: 5, SocketID: 1, NodeID: 1, L3: 1},
+				{CPUID: 6, CoreID: 6, SocketID: 1, NodeID: 1, L3: 1},
+				{CPUID: 7, CoreID: 7, SocketID: 1, NodeID: 1, L3: 1},
 			}},
 			want: &CPUTotalInfo{
-				NumberCPUs:    8,
-				NumberCores:   8,
-				NumberSockets: 4,
-				NumberNodes:   2,
-				NumberL3s:     2,
+				NumberCPUs: 8,
+				CoreToCPU: map[int32][]ProcessorInfo{
+					0: {{CPUID: 0, CoreID: 0, SocketID: 0, NodeID: 0, L3: 0}},
+					1: {{CPUID: 1, CoreID: 1, SocketID: 0, NodeID: 0, L3: 0}},
+					2: {{CPUID: 2, CoreID: 2, SocketID: 0, NodeID: 0, L3: 0}},
+					3: {{CPUID: 3, CoreID: 3, SocketID: 0, NodeID: 0, L3: 0}},
+					4: {{CPUID: 4, CoreID: 4, SocketID: 1, NodeID: 1, L3: 1}},
+					5: {{CPUID: 5, CoreID: 5, SocketID: 1, NodeID: 1, L3: 1}},
+					6: {{CPUID: 6, CoreID: 6, SocketID: 1, NodeID: 1, L3: 1}},
+					7: {{CPUID: 7, CoreID: 7, SocketID: 1, NodeID: 1, L3: 1}},
+				},
+				NodeToCPU: map[int32][]ProcessorInfo{
+					0: {
+						{CPUID: 0, CoreID: 0, SocketID: 0, NodeID: 0, L3: 0},
+						{CPUID: 1, CoreID: 1, SocketID: 0, NodeID: 0, L3: 0},
+						{CPUID: 2, CoreID: 2, SocketID: 0, NodeID: 0, L3: 0},
+						{CPUID: 3, CoreID: 3, SocketID: 0, NodeID: 0, L3: 0},
+					},
+					1: {
+						{CPUID: 4, CoreID: 4, SocketID: 1, NodeID: 1, L3: 1},
+						{CPUID: 5, CoreID: 5, SocketID: 1, NodeID: 1, L3: 1},
+						{CPUID: 6, CoreID: 6, SocketID: 1, NodeID: 1, L3: 1},
+						{CPUID: 7, CoreID: 7, SocketID: 1, NodeID: 1, L3: 1},
+					},
+				},
+				SocketToCPU: map[int32][]ProcessorInfo{
+					0: {
+						{CPUID: 0, CoreID: 0, SocketID: 0, NodeID: 0, L3: 0},
+						{CPUID: 1, CoreID: 1, SocketID: 0, NodeID: 0, L3: 0},
+						{CPUID: 2, CoreID: 2, SocketID: 0, NodeID: 0, L3: 0},
+						{CPUID: 3, CoreID: 3, SocketID: 0, NodeID: 0, L3: 0},
+					},
+					1: {
+						{CPUID: 4, CoreID: 4, SocketID: 1, NodeID: 1, L3: 1},
+						{CPUID: 5, CoreID: 5, SocketID: 1, NodeID: 1, L3: 1},
+						{CPUID: 6, CoreID: 6, SocketID: 1, NodeID: 1, L3: 1},
+						{CPUID: 7, CoreID: 7, SocketID: 1, NodeID: 1, L3: 1},
+					},
+				},
+				L3ToCPU: map[int32][]ProcessorInfo{
+					0: {
+						{CPUID: 0, CoreID: 0, SocketID: 0, NodeID: 0, L3: 0},
+						{CPUID: 1, CoreID: 1, SocketID: 0, NodeID: 0, L3: 0},
+						{CPUID: 2, CoreID: 2, SocketID: 0, NodeID: 0, L3: 0},
+						{CPUID: 3, CoreID: 3, SocketID: 0, NodeID: 0, L3: 0},
+					},
+					1: {
+						{CPUID: 4, CoreID: 4, SocketID: 1, NodeID: 1, L3: 1},
+						{CPUID: 5, CoreID: 5, SocketID: 1, NodeID: 1, L3: 1},
+						{CPUID: 6, CoreID: 6, SocketID: 1, NodeID: 1, L3: 1},
+						{CPUID: 7, CoreID: 7, SocketID: 1, NodeID: 1, L3: 1},
+					},
+				},
 			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := calculateCPUTotalInfo(tt.args.processorInfos)
-			if !reflect.DeepEqual(tt.want, got) {
-				t.Errorf("calculateCPUTotalInfo want %v but got %v", tt.want, got)
-			}
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
@@ -479,4 +620,52 @@ func Test_GetLocalCPUInfo(t *testing.T) {
 		t.Error("failed to get local CPU info: ", err)
 	}
 	t.Log("get local CPU info ", localCPUInfo)
+}
+
+func Test_getCPUBasicInfo(t *testing.T) {
+	mockCPUInfoContent := `processor       : 0
+vendor_id       : unknown
+cpu family      : 0
+model           : 100
+model name      : Fake 2000 CPU @ 2.50GHz
+stepping        : 5
+microcode       : 0xd000111
+cpu MHz         : 3500.000
+cache size      : 64000 KB
+physical id     : 0
+siblings        : 64
+core id         : 0
+cpu cores       : 32
+apicid          : 0
+initial apicid  : 0
+fpu             : yes
+fpu_exception   : yes
+cpuid level     : 10
+wp              : yes
+flags           : fpu vme de pse tsc msr apic sep mtrr pge mcaclflush dts acpi mmx sse ss ht smx
+vmx flags       : 
+bugs            : 
+bogomips        : 6000.00
+clflush size    : 64
+cache_alignment : 64
+address sizes   : 46 bits physical, 57 bits virtual
+power management:
+`
+	t.Run("test", func(t *testing.T) {
+		helper := system.NewFileTestUtil(t)
+		defer helper.Cleanup()
+		helper.WriteProcSubFileContents(system.ProcCPUInfoName, mockCPUInfoContent)
+		helper.WriteFileContents(system.GetSysCPUSMTActivePath(), "1")
+		helper.WriteFileContents(system.GetSysIntelPStateNoTurboPath(), "0")
+
+		expectBasicInfo := &extension.CPUBasicInfo{
+			CPUModel:           "Fake 2000 CPU @ 2.50GHz",
+			HyperThreadEnabled: true,
+			TurboEnabled:       true,
+			VendorID:           "unknown",
+		}
+		basicInfo, err := getCPUBasicInfo()
+		assert.NoError(t, err)
+		assert.Equal(t, expectBasicInfo, basicInfo)
+	})
 }

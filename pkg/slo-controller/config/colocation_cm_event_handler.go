@@ -32,7 +32,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	"github.com/koordinator-sh/koordinator/apis/extension"
+	"github.com/koordinator-sh/koordinator/apis/configuration"
 	"github.com/koordinator-sh/koordinator/pkg/util"
 	"github.com/koordinator-sh/koordinator/pkg/util/sloconfig"
 )
@@ -45,14 +45,14 @@ const (
 var _ handler.EventHandler = &ColocationHandlerForConfigMapEvent{}
 
 type ColocationCfgCache interface {
-	GetCfgCopy() *extension.ColocationCfg
+	GetCfgCopy() *configuration.ColocationCfg
 	IsCfgAvailable() bool
 	IsErrorStatus() bool
 }
 
 type colocationCfgCache struct {
 	lock          sync.RWMutex
-	colocationCfg extension.ColocationCfg
+	colocationCfg configuration.ColocationCfg
 	available     bool
 	errorStatus   bool
 }
@@ -65,7 +65,7 @@ type ColocationHandlerForConfigMapEvent struct {
 	recorder record.EventRecorder
 }
 
-func NewColocationHandlerForConfigMapEvent(client client.Client, initCfg extension.ColocationCfg, recorder record.EventRecorder) *ColocationHandlerForConfigMapEvent {
+func NewColocationHandlerForConfigMapEvent(client client.Client, initCfg configuration.ColocationCfg, recorder record.EventRecorder) *ColocationHandlerForConfigMapEvent {
 	colocationHandler := &ColocationHandlerForConfigMapEvent{cfgCache: colocationCfgCache{colocationCfg: initCfg}, Client: client, recorder: recorder}
 	colocationHandler.SyncCacheIfChanged = colocationHandler.syncColocationCfgIfChanged
 	colocationHandler.EnqueueRequest = colocationHandler.triggerAllNodeEnqueue
@@ -90,8 +90,8 @@ func (p *ColocationHandlerForConfigMapEvent) syncConfig(configMap *corev1.Config
 		return p.updateCacheIfChanged(sloconfig.NewDefaultColocationCfg(), true)
 	}
 
-	newCfg := &extension.ColocationCfg{}
-	configStr := configMap.Data[extension.ColocationConfigKey]
+	newCfg := &configuration.ColocationCfg{}
+	configStr := configMap.Data[configuration.ColocationConfigKey]
 	if configStr == "" {
 		klog.Warningf("colocation config is empty!,use default config")
 		return p.updateCacheIfChanged(sloconfig.NewDefaultColocationCfg(), false)
@@ -100,7 +100,7 @@ func (p *ColocationHandlerForConfigMapEvent) syncConfig(configMap *corev1.Config
 	err := json.Unmarshal([]byte(configStr), &newCfg)
 	if err != nil {
 		//if controller restart ,cache will unavailable, else use old cfg
-		klog.Errorf("syncConfig failed! parse colocation error then use old Cfg ,configmap %s/%s, err: %s",
+		klog.Errorf("syncConfig failed since parse colocation error, use old Cfg ,configmap %s/%s, err: %s",
 			sloconfig.ConfigNameSpace, sloconfig.SLOCtrlConfigMap, err)
 		p.recorder.Eventf(configMap, "Warning", ReasonColocationConfigUnmarshalFailed, "failed to unmarshal colocation config, err: %s", err)
 		p.cfgCache.errorStatus = true
@@ -111,11 +111,11 @@ func (p *ColocationHandlerForConfigMapEvent) syncConfig(configMap *corev1.Config
 	// merge default cluster strategy
 	mergedClusterCfg := defaultCfg.ColocationStrategy.DeepCopy()
 	mergedInterface, _ := util.MergeCfg(mergedClusterCfg, &newCfg.ColocationStrategy)
-	newCfg.ColocationStrategy = *(mergedInterface.(*extension.ColocationStrategy))
+	newCfg.ColocationStrategy = *(mergedInterface.(*configuration.ColocationStrategy))
 
 	if !sloconfig.IsColocationStrategyValid(&newCfg.ColocationStrategy) {
 		//if controller restart ,cache will unavailable, else use old cfg
-		klog.Errorf("syncConfig failed!  invalid cluster config,%+v", newCfg.ColocationStrategy)
+		klog.Errorf("syncConfig failed since the cluster config is invalid, %+v", newCfg.ColocationStrategy)
 		p.cfgCache.errorStatus = true
 		return false
 	}
@@ -124,9 +124,9 @@ func (p *ColocationHandlerForConfigMapEvent) syncConfig(configMap *corev1.Config
 		// merge with clusterStrategy
 		clusterStrategyCopy := newCfg.ColocationStrategy.DeepCopy()
 		mergedNodeStrategyInterface, _ := util.MergeCfg(clusterStrategyCopy, &nodeStrategy.ColocationStrategy)
-		newNodeStrategy := *mergedNodeStrategyInterface.(*extension.ColocationStrategy)
+		newNodeStrategy := *mergedNodeStrategyInterface.(*configuration.ColocationStrategy)
 		if !sloconfig.IsColocationStrategyValid(&newNodeStrategy) {
-			klog.Errorf("syncConfig failed! invalid node config,then use clusterCfg,nodeCfg:%+v", nodeStrategy)
+			klog.Errorf("syncConfig failed since node config if invalid, use clusterCfg, nodeCfg:%+v", nodeStrategy)
 			newCfg.NodeConfigs[index].ColocationStrategy = *newCfg.ColocationStrategy.DeepCopy()
 		} else {
 			newCfg.NodeConfigs[index].ColocationStrategy = newNodeStrategy
@@ -137,7 +137,7 @@ func (p *ColocationHandlerForConfigMapEvent) syncConfig(configMap *corev1.Config
 	return changed
 }
 
-func (p *ColocationHandlerForConfigMapEvent) updateCacheIfChanged(newCfg *extension.ColocationCfg, errorStatus bool) bool {
+func (p *ColocationHandlerForConfigMapEvent) updateCacheIfChanged(newCfg *configuration.ColocationCfg, errorStatus bool) bool {
 	changed := !reflect.DeepEqual(&p.cfgCache.colocationCfg, newCfg)
 	if changed {
 		oldInfoFmt, _ := json.MarshalIndent(p.cfgCache.colocationCfg, "", "\t")
@@ -164,7 +164,7 @@ func (p *ColocationHandlerForConfigMapEvent) triggerAllNodeEnqueue(q *workqueue.
 	}
 }
 
-func (p *ColocationHandlerForConfigMapEvent) GetCfgCopy() *extension.ColocationCfg {
+func (p *ColocationHandlerForConfigMapEvent) GetCfgCopy() *configuration.ColocationCfg {
 	p.cfgCache.lock.RLock()
 	defer p.cfgCache.lock.RUnlock()
 	return p.cfgCache.colocationCfg.DeepCopy()

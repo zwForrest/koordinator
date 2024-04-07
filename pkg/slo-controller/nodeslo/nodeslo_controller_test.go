@@ -34,7 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	"github.com/koordinator-sh/koordinator/apis/extension"
+	"github.com/koordinator-sh/koordinator/apis/configuration"
 	slov1alpha1 "github.com/koordinator-sh/koordinator/apis/slo/v1alpha1"
 	"github.com/koordinator-sh/koordinator/pkg/util/sloconfig"
 )
@@ -43,7 +43,7 @@ import (
 // plugins in koordlet/resmanager will get the interface and
 // change it to strategy individually
 func getExtensionsIfMap(in slov1alpha1.ExtensionsMap) (*slov1alpha1.ExtensionsMap, error) {
-	extensionsMap := &slov1alpha1.ExtensionsMap{}
+	extensionsMap := &slov1alpha1.ExtensionsMap{Object: map[string]interface{}{}}
 	for extkey, extIf := range in.Object {
 		//marshal unmarshal to
 		extStr, err := json.Marshal(extIf)
@@ -114,6 +114,7 @@ func TestNodeSLOReconciler_initNodeSLO(t *testing.T) {
 				ResourceQOSStrategy:         &slov1alpha1.ResourceQOSStrategy{},
 				CPUBurstStrategy:            sloconfig.DefaultCPUBurstStrategy(),
 				SystemStrategy:              sloconfig.DefaultSystemStrategy(),
+				HostApplications:            []slov1alpha1.HostApplicationSpec{},
 				Extensions:                  testingExtensions,
 			},
 			wantErr: false,
@@ -134,8 +135,8 @@ func TestNodeSLOReconciler_initNodeSLO(t *testing.T) {
 					Namespace: sloconfig.ConfigNameSpace,
 				},
 				Data: map[string]string{
-					extension.ResourceThresholdConfigKey: "{\"clusterStrategy\":{\"invalidField\",\"cpuSuppressThresholdPercent\":60}}",
-					extension.ResourceQOSConfigKey:       "{\"clusterStrategy\":{\"invalidField\"}}",
+					configuration.ResourceThresholdConfigKey: "{\"clusterStrategy\":{\"invalidField\",\"cpuSuppressThresholdPercent\":60}}",
+					configuration.ResourceQOSConfigKey:       "{\"clusterStrategy\":{\"invalidField\"}}",
 				},
 			}},
 			want: &slov1alpha1.NodeSLOSpec{
@@ -143,6 +144,7 @@ func TestNodeSLOReconciler_initNodeSLO(t *testing.T) {
 				ResourceQOSStrategy:         &slov1alpha1.ResourceQOSStrategy{},
 				CPUBurstStrategy:            sloconfig.DefaultCPUBurstStrategy(),
 				SystemStrategy:              sloconfig.DefaultSystemStrategy(),
+				HostApplications:            []slov1alpha1.HostApplicationSpec{},
 				Extensions:                  testingExtensions,
 			},
 			wantErr: false,
@@ -163,7 +165,7 @@ func TestNodeSLOReconciler_initNodeSLO(t *testing.T) {
 					Namespace: sloconfig.ConfigNameSpace,
 				},
 				Data: map[string]string{
-					extension.ResourceThresholdConfigKey: "{\"clusterStrategy\":{\"enable\":false,\"cpuSuppressThresholdPercent\":60}}",
+					configuration.ResourceThresholdConfigKey: "{\"clusterStrategy\":{\"enable\":false,\"cpuSuppressThresholdPercent\":60}}",
 				},
 			}},
 			want: &slov1alpha1.NodeSLOSpec{
@@ -171,6 +173,7 @@ func TestNodeSLOReconciler_initNodeSLO(t *testing.T) {
 				ResourceQOSStrategy:         &slov1alpha1.ResourceQOSStrategy{},
 				CPUBurstStrategy:            sloconfig.DefaultCPUBurstStrategy(),
 				SystemStrategy:              sloconfig.DefaultSystemStrategy(),
+				HostApplications:            []slov1alpha1.HostApplicationSpec{},
 				Extensions:                  testingExtensions,
 			},
 			wantErr: false,
@@ -191,8 +194,8 @@ func TestNodeSLOReconciler_initNodeSLO(t *testing.T) {
 					Namespace: sloconfig.ConfigNameSpace,
 				},
 				Data: map[string]string{
-					extension.ResourceThresholdConfigKey: "{\"clusterStrategy\":{\"enable\":false,\"cpuSuppressThresholdPercent\":60}}",
-					extension.ResourceQOSConfigKey: `
+					configuration.ResourceThresholdConfigKey: "{\"clusterStrategy\":{\"enable\":false,\"cpuSuppressThresholdPercent\":60}}",
+					configuration.ResourceQOSConfigKey: `
 {
   "clusterStrategy": {
     "beClass": {
@@ -210,6 +213,7 @@ func TestNodeSLOReconciler_initNodeSLO(t *testing.T) {
 				ResourceQOSStrategy:         testingResourceQOSStrategy,
 				CPUBurstStrategy:            sloconfig.DefaultCPUBurstStrategy(),
 				SystemStrategy:              sloconfig.DefaultSystemStrategy(),
+				HostApplications:            []slov1alpha1.HostApplicationSpec{},
 				Extensions:                  testingExtensions,
 			},
 			wantErr: false,
@@ -230,8 +234,8 @@ func TestNodeSLOReconciler_initNodeSLO(t *testing.T) {
 					Namespace: sloconfig.ConfigNameSpace,
 				},
 				Data: map[string]string{
-					extension.ResourceThresholdConfigKey: "{\"clusterStrategy\":{\"enable\":false,\"cpuSuppressThresholdPercent\":60}}",
-					extension.ResourceQOSConfigKey: `
+					configuration.ResourceThresholdConfigKey: "{\"clusterStrategy\":{\"enable\":false,\"cpuSuppressThresholdPercent\":60}}",
+					configuration.ResourceQOSConfigKey: `
 {
   "clusterStrategy": {
     "beClass": {
@@ -249,6 +253,7 @@ func TestNodeSLOReconciler_initNodeSLO(t *testing.T) {
 				ResourceQOSStrategy:         testingResourceQOSStrategyOld,
 				CPUBurstStrategy:            sloconfig.DefaultCPUBurstStrategy(),
 				SystemStrategy:              sloconfig.DefaultSystemStrategy(),
+				HostApplications:            []slov1alpha1.HostApplicationSpec{},
 				Extensions:                  testingExtensions,
 			},
 			wantErr: false,
@@ -302,8 +307,8 @@ func TestNodeSLOReconciler_Reconcile(t *testing.T) {
 			Namespace: sloconfig.ConfigNameSpace,
 		},
 		Data: map[string]string{
-			extension.ResourceThresholdConfigKey: "{\"clusterStrategy\":{\"enable\":true,\"cpuSuppressThresholdPercent\":60}}",
-			extension.ResourceQOSConfigKey: `
+			configuration.ResourceThresholdConfigKey: "{\"clusterStrategy\":{\"enable\":true,\"cpuSuppressThresholdPercent\":60}}",
+			configuration.ResourceQOSConfigKey: `
 {
   "clusterStrategy": {
     "beClass": {
@@ -314,8 +319,9 @@ func TestNodeSLOReconciler_Reconcile(t *testing.T) {
   }
 }
 `,
-			extension.CPUBurstConfigKey: "{\"clusterStrategy\":{\"cfsQuotaBurstPeriodSeconds\":60}}",
-			extension.SystemConfigKey:   "{\"clusterStrategy\":{\"minFreeKbytesFactor\":150,\"watermarkScaleFactor\":150}}",
+			configuration.CPUBurstConfigKey:        "{\"clusterStrategy\":{\"cfsQuotaBurstPeriodSeconds\":60}}",
+			configuration.SystemConfigKey:          "{\"clusterStrategy\":{\"minFreeKbytesFactor\":150,\"watermarkScaleFactor\":150}}",
+			configuration.HostApplicationConfigKey: "{\"applications\": [{\"name\": \"test-app\"}]}",
 		},
 	}
 	testingResourceThresholdStrategy := sloconfig.DefaultResourceThresholdStrategy()
@@ -337,6 +343,12 @@ func TestNodeSLOReconciler_Reconcile(t *testing.T) {
 	testingSystemStrategy := sloconfig.DefaultSystemStrategy()
 	testingSystemStrategy.MinFreeKbytesFactor = pointer.Int64(150)
 
+	testingHostApplication := []slov1alpha1.HostApplicationSpec{
+		{
+			Name: "test-app",
+		},
+	}
+
 	testingExtensionsMap := *getDefaultExtensionStrategy()
 	testingExtensionsIfMap, err := getExtensionsIfMap(testingExtensionsMap)
 	if err != nil {
@@ -348,6 +360,7 @@ func TestNodeSLOReconciler_Reconcile(t *testing.T) {
 		ResourceQOSStrategy:         testingResourceQOSStrategy,
 		CPUBurstStrategy:            testingCPUBurstStrategy,
 		SystemStrategy:              testingSystemStrategy,
+		HostApplications:            testingHostApplication,
 		Extensions:                  testingExtensionsIfMap,
 	}
 	nodeReq := ctrl.Request{NamespacedName: types.NamespacedName{Name: testingNode.Name}}

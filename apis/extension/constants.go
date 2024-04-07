@@ -26,6 +26,7 @@ const (
 	SchedulingDomainPrefix = "scheduling.koordinator.sh"
 	// NodeDomainPrefix represents the node domain prefix
 	NodeDomainPrefix = "node.koordinator.sh"
+	PodDomainPrefix  = "pod.koordinator.sh"
 
 	LabelPodQoS      = DomainPrefix + "qosClass"
 	LabelPodPriority = DomainPrefix + "priority"
@@ -35,4 +36,23 @@ const (
 	LabelPodPriorityClass = DomainPrefix + "priority-class"
 
 	LabelManagedBy = "app.kubernetes.io/managed-by"
+
+	// LabelPodMutatingUpdate is a label key that pods with `pod.koordinator.sh/mutating-update=true` will
+	// be mutated by Koordinator webhook when updating.
+	LabelPodMutatingUpdate = PodDomainPrefix + "/mutating-update"
+
+	// AnnotationNetworkQOS are used to set bandwidth for Pod. The unit is bps.
+	// For example, 10M means 10 megabits per second.
+	AnnotationNetworkQOS = DomainPrefix + "networkQOS"
+)
+
+type AggregationType string
+
+const (
+	// max is not welcomed since it may import outliers
+	AVG AggregationType = "avg"
+	P99 AggregationType = "p99"
+	P95 AggregationType = "p95"
+	P90 AggregationType = "p90"
+	P50 AggregationType = "p50"
 )

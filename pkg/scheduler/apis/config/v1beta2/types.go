@@ -19,10 +19,9 @@ package v1beta2
 import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	schedconfig "k8s.io/kubernetes/pkg/scheduler/apis/config"
+	schedconfigv1beta2 "k8s.io/kube-scheduler/config/v1beta2"
 
 	"github.com/koordinator-sh/koordinator/apis/extension"
-	slov1alpha1 "github.com/koordinator-sh/koordinator/apis/slo/v1alpha1"
 )
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -61,12 +60,12 @@ type LoadAwareSchedulingAggregatedArgs struct {
 	// UsageThresholds indicates the resource utilization threshold of the machine based on percentile statistics
 	UsageThresholds map[corev1.ResourceName]int64 `json:"usageThresholds,omitempty"`
 	// UsageAggregationType indicates the percentile type of the machine's utilization when filtering
-	UsageAggregationType slov1alpha1.AggregationType `json:"usageAggregationType,omitempty"`
+	UsageAggregationType extension.AggregationType `json:"usageAggregationType,omitempty"`
 	// UsageAggregatedDuration indicates the statistical period of the percentile of the machine's utilization when filtering
 	UsageAggregatedDuration *metav1.Duration `json:"usageAggregatedDuration,omitempty"`
 
 	// ScoreAggregationType indicates the percentile type of the machine's utilization when scoring
-	ScoreAggregationType slov1alpha1.AggregationType `json:"scoreAggregationType,omitempty"`
+	ScoreAggregationType extension.AggregationType `json:"scoreAggregationType,omitempty"`
 	// ScoreAggregatedDuration indicates the statistical period of the percentile of Prod Pod's utilization when scoring
 	ScoreAggregatedDuration *metav1.Duration `json:"scoreAggregatedDuration,omitempty"`
 }
@@ -90,7 +89,7 @@ type ScoringStrategy struct {
 
 	// Resources a list of pairs <resource, weight> to be considered while scoring
 	// allowed weights start from 1.
-	Resources []schedconfig.ResourceSpec `json:"resources,omitempty"`
+	Resources []schedconfigv1beta2.ResourceSpec `json:"resources,omitempty"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -99,8 +98,14 @@ type ScoringStrategy struct {
 type NodeNUMAResourceArgs struct {
 	metav1.TypeMeta
 
-	DefaultCPUBindPolicy *CPUBindPolicy   `json:"defaultCPUBindPolicy,omitempty"`
-	ScoringStrategy      *ScoringStrategy `json:"scoringStrategy,omitempty"`
+	// DefaultCPUBindPolicy represents the default CPU bind policy.
+	// If it is empty and the Pod does not declare a binding policy,
+	// the core will not be bound to the LSE/LSR type Pod.
+	DefaultCPUBindPolicy *CPUBindPolicy `json:"defaultCPUBindPolicy,omitempty"`
+	// ScoringStrategy is used to configure the scoring strategy of the node-level.
+	ScoringStrategy *ScoringStrategy `json:"scoringStrategy,omitempty"`
+	// NUMAScoringStrategy is used to configure the scoring strategy of the NUMANode-level
+	NUMAScoringStrategy *ScoringStrategy `json:"numaScoringStrategy,omitempty"`
 }
 
 // CPUBindPolicy defines the CPU binding policy
@@ -128,7 +133,7 @@ const (
 	CPUExclusivePolicyNUMANodeLevel CPUExclusivePolicy = extension.CPUExclusivePolicyNUMANodeLevel
 )
 
-// NUMAAllocateStrategy indicates how to choose satisfied NUMA Nodes
+// NUMAAllocateStrategy indicates how to choose satisfied NUMA Nodes during binding CPUs
 type NUMAAllocateStrategy = extension.NUMAAllocateStrategy
 
 const (
@@ -176,6 +181,9 @@ type ElasticQuotaArgs struct {
 
 	// EnableCheckParentQuota check parentQuotaGroups' used and runtime Quota in PreFilter
 	EnableCheckParentQuota *bool `json:"enableCheckParentQuota,omitempty"`
+
+	// EnableRuntimeQuota if false, use max instead of runtime for all checks.
+	EnableRuntimeQuota *bool `json:"enableRuntimeQuota,omitempty"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -202,5 +210,8 @@ type DeviceShareArgs struct {
 	metav1.TypeMeta
 
 	// Allocator indicates the expected allocator to use
+	// Deprecated: Adapting to different allocators is no longer supported.
 	Allocator string `json:"allocator,omitempty"`
+	// ScoringStrategy selects the device resource scoring strategy.
+	ScoringStrategy *ScoringStrategy `json:"scoringStrategy,omitempty"`
 }

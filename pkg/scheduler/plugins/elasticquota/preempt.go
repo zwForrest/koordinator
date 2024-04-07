@@ -31,12 +31,12 @@ import (
 	corev1helpers "k8s.io/component-helpers/scheduling/corev1"
 	"k8s.io/klog/v2"
 	extenderv1 "k8s.io/kube-scheduler/extender/v1"
-	"k8s.io/kubernetes/pkg/api/v1/resource"
 	"k8s.io/kubernetes/pkg/features"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/framework/preemption"
 	"k8s.io/kubernetes/pkg/scheduler/util"
 
+	"github.com/koordinator-sh/koordinator/apis/extension"
 	"github.com/koordinator-sh/koordinator/pkg/scheduler/plugins/elasticquota/core"
 )
 
@@ -170,8 +170,7 @@ func (g *Plugin) SelectVictimsOnNode(
 	violatingVictims, nonViolatingVictims := filterPodsWithPDBViolation(potentialVictims, pdbs)
 
 	postFilterState, _ := getPostFilterState(state)
-	pod = core.RunDecoratePod(pod)
-	podReq, _ := resource.PodRequestsAndLimits(pod)
+	podReq, _ := core.PodRequestsAndLimits(pod)
 
 	reprievePod := func(pi *framework.PodInfo) (bool, error) {
 		if err := addPod(pi); err != nil {
@@ -188,8 +187,8 @@ func (g *Plugin) SelectVictimsOnNode(
 			klog.V(5).InfoS("Pod is a potential preemption victim on node", "pod", klog.KObj(rpi), "node", klog.KObj(nodeInfo.Node()))
 		}
 
-		newUsed := quotav1.Add(postFilterState.used, podReq)
-		if isLessEqual, _ := quotav1.LessThanOrEqual(newUsed, postFilterState.runtime); !isLessEqual {
+		newUsed := quotav1.Mask(quotav1.Add(postFilterState.used, podReq), quotav1.ResourceNames(podReq))
+		if isLessEqual, _ := quotav1.LessThanOrEqual(newUsed, postFilterState.usedLimit); !isLessEqual {
 			if err := removePod(pi); err != nil {
 				return false, err
 			}
@@ -282,6 +281,9 @@ func getPDBLister(handle framework.Handle) policylisters.PodDisruptionBudgetList
 }
 
 func (g *Plugin) canPreempt(pod, victim *corev1.Pod) bool {
+	if extension.IsPodNonPreemptible(victim) {
+		return false
+	}
 	podPri := corev1helpers.PodPriority(pod)
 	vicPri := corev1helpers.PodPriority(victim)
 

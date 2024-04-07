@@ -55,7 +55,7 @@ func stillInTheReportInterval(assignedTime, updateTime time.Time, reportInterval
 	return assignedTime.Before(updateTime) && updateTime.Sub(assignedTime) < reportInterval
 }
 
-func getTargetAggregatedUsage(nodeMetric *slov1alpha1.NodeMetric, aggregatedDuration *metav1.Duration, aggregationType slov1alpha1.AggregationType) *slov1alpha1.ResourceMap {
+func getTargetAggregatedUsage(nodeMetric *slov1alpha1.NodeMetric, aggregatedDuration *metav1.Duration, aggregationType extension.AggregationType) *slov1alpha1.ResourceMap {
 	if nodeMetric.Status.NodeMetric == nil || len(nodeMetric.Status.NodeMetric.AggregatedNodeUsages) == 0 {
 		return nil
 	}
@@ -160,7 +160,7 @@ func buildPodMetricMap(podLister corev1listers.PodLister, nodeMetric *slov1alpha
 		if err != nil {
 			continue
 		}
-		if filterProdPod && extension.GetPriorityClass(pod) != extension.PriorityProd {
+		if filterProdPod && extension.GetPodPriorityClassWithDefault(pod) != extension.PriorityProd {
 			continue
 		}
 		name := getPodNamespacedName(podMetric.Namespace, podMetric.Name)

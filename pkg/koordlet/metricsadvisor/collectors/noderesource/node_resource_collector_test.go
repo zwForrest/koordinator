@@ -72,6 +72,9 @@ func Test_nodeResourceCollector_collectNodeResUsed(t *testing.T) {
 		assert.NoError(t, err)
 	}()
 	testNow := time.Now()
+	timeNow = func() time.Time {
+		return testNow
+	}
 	testLastCPUStatTime := testNow.Add(-time.Second)
 	testCPUUsage := 1.0
 	testUserTicks := testCPUUsage * float64(time.Second) / system.Jiffies
@@ -131,6 +134,7 @@ DirectMap1G:           0 kB`)
 		CPUTick:   0,
 		Timestamp: testLastCPUStatTime,
 	}
+	testDeviceCollector := &fakeDeviceCollector{isEnabled: true}
 
 	c := &nodeResourceCollector{
 		started:         atomic.NewBool(false),
@@ -138,8 +142,9 @@ DirectMap1G:           0 kB`)
 		metricDB:        metricCache,
 		lastNodeCPUStat: testLastCPUStat,
 		deviceCollectors: map[string]framework.DeviceCollector{
-			"TestDeviceCollector": &fakeDeviceCollector{},
+			"TestDeviceCollector": testDeviceCollector,
 		},
+		sharedState: framework.NewSharedState(),
 	}
 	assert.NotNil(t, c)
 
@@ -151,9 +156,35 @@ DirectMap1G:           0 kB`)
 	// validate collected values
 	// assert collected time is less than 10s
 	got, err := testGetNodeMetrics(t, c.metricDB, testNow, 5*time.Second)
-	assert.True(t, got.Cpu().MilliValue() > 500 && got.Cpu().MilliValue() <= 1000)
+	wantCPU := testCPUUsage
+	assert.Equal(t, wantCPU, float64(got.Cpu().MilliValue()/1000))
 	// MemTotal - MemAvailable
-	assert.Equal(t, int64(524288*1024), got.Memory().Value())
+	wantMemory := float64(524288 * 1024)
+	assert.Equal(t, wantMemory, float64(got.Memory().Value()))
+
+	// validate in share state
+	nodeCPU, nodeMemory := c.sharedState.GetNodeUsage()
+	assert.NoError(t, err)
+	assert.Equal(t, wantCPU, nodeCPU.Value)
+	assert.Equal(t, wantMemory, nodeMemory.Value)
+
+	// test collect without device collector
+	testDeviceCollector.isEnabled = false
+	testDeviceCollector.getNodeMetric = func() ([]metriccache.MetricSample, error) {
+		panic("should not be called")
+	}
+	assert.NotPanics(t, func() {
+		c.collectNodeResUsed()
+	})
+	assert.True(t, c.Started())
+	// validate collected values
+	// assert collected time is less than 10s
+	got, err = testGetNodeMetrics(t, c.metricDB, testNow, 5*time.Second)
+	wantCPU = testCPUUsage
+	assert.Equal(t, wantCPU, float64(got.Cpu().MilliValue()/1000))
+	// MemTotal - MemAvailable
+	wantMemory = float64(524288 * 1024)
+	assert.Equal(t, wantMemory, float64(got.Memory().Value()))
 
 	// test first cpu collection
 	c.lastNodeCPUStat = nil
@@ -173,9 +204,18 @@ DirectMap1G:           0 kB`)
 
 type fakeDeviceCollector struct {
 	framework.DeviceCollector
+	isEnabled     bool
+	getNodeMetric func() ([]metriccache.MetricSample, error)
+}
+
+func (f *fakeDeviceCollector) Enabled() bool {
+	return f.isEnabled
 }
 
 func (f *fakeDeviceCollector) GetNodeMetric() ([]metriccache.MetricSample, error) {
+	if f.getNodeMetric != nil {
+		return f.getNodeMetric()
+	}
 	return nil, nil
 }
 

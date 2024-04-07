@@ -22,16 +22,21 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8sfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/klog/v2"
 	schedconfig "k8s.io/kubernetes/pkg/scheduler/apis/config"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 
+	apiext "github.com/koordinator-sh/koordinator/apis/extension"
 	koordinatorclientset "github.com/koordinator-sh/koordinator/pkg/client/clientset/versioned"
 	koordinatorinformers "github.com/koordinator-sh/koordinator/pkg/client/informers/externalversions"
+	"github.com/koordinator-sh/koordinator/pkg/features"
+	"github.com/koordinator-sh/koordinator/pkg/scheduler/frameworkext/topologymanager"
 	reservationutil "github.com/koordinator-sh/koordinator/pkg/util/reservation"
 )
 
 var _ FrameworkExtender = &frameworkExtenderImpl{}
+var _ topologymanager.NUMATopologyHintProviderFactory = &frameworkExtenderImpl{}
 
 type frameworkExtenderImpl struct {
 	framework.Framework
@@ -40,6 +45,7 @@ type frameworkExtenderImpl struct {
 
 	schedulerFn       func() Scheduler
 	configuredPlugins *schedconfig.Plugins
+	monitor           *SchedulerMonitor
 
 	koordinatorClientSet             koordinatorclientset.Interface
 	koordinatorSharedInformerFactory koordinatorinformers.SharedInformerFactory
@@ -48,13 +54,17 @@ type frameworkExtenderImpl struct {
 	filterTransformers    map[string]FilterTransformer
 	scoreTransformers     map[string]ScoreTransformer
 
-	reservationFilterPlugins    []ReservationFilterPlugin
-	reservationScorePlugins     []ReservationScorePlugin
-	reservationNominatorPlugins []ReservationNominator
-	reservationPreBindPlugins   []ReservationPreBindPlugin
-	reservationRestorePlugins   []ReservationRestorePlugin
+	reservationNominator      ReservationNominator
+	reservationFilterPlugins  []ReservationFilterPlugin
+	reservationScorePlugins   []ReservationScorePlugin
+	reservationPreBindPlugins []ReservationPreBindPlugin
+	reservationRestorePlugins []ReservationRestorePlugin
 
+	resizePodPlugins         []ResizePodPlugin
 	preBindExtensionsPlugins map[string]PreBindExtensions
+
+	numaTopologyHintProviders []topologymanager.NUMATopologyHintProvider
+	topologyManager           topologymanager.Interface
 }
 
 func NewFrameworkExtender(f *FrameworkExtenderFactory, fw framework.Framework) FrameworkExtender {
@@ -66,13 +76,16 @@ func NewFrameworkExtender(f *FrameworkExtenderFactory, fw framework.Framework) F
 		Framework:                        fw,
 		errorHandlerDispatcher:           f.errorHandlerDispatcher,
 		schedulerFn:                      schedulerFn,
+		monitor:                          f.monitor,
 		koordinatorClientSet:             f.KoordinatorClientSet(),
 		koordinatorSharedInformerFactory: f.koordinatorSharedInformerFactory,
+		reservationNominator:             f.reservationNominator,
 		preFilterTransformers:            map[string]PreFilterTransformer{},
 		filterTransformers:               map[string]FilterTransformer{},
 		scoreTransformers:                map[string]ScoreTransformer{},
 		preBindExtensionsPlugins:         map[string]PreBindExtensions{},
 	}
+	frameworkExtender.topologyManager = topologymanager.New(frameworkExtender)
 	return frameworkExtender
 }
 
@@ -100,14 +113,15 @@ func (ext *frameworkExtenderImpl) updatePlugins(pl framework.Plugin) {
 	if transformer, ok := pl.(SchedulingTransformer); ok {
 		ext.updateTransformer(transformer)
 	}
+	// TODO(joseph): In the future, use only the default ReservationNominator
+	if r, ok := pl.(ReservationNominator); ok {
+		ext.reservationNominator = r
+	}
 	if r, ok := pl.(ReservationFilterPlugin); ok {
 		ext.reservationFilterPlugins = append(ext.reservationFilterPlugins, r)
 	}
 	if r, ok := pl.(ReservationScorePlugin); ok {
 		ext.reservationScorePlugins = append(ext.reservationScorePlugins, r)
-	}
-	if r, ok := pl.(ReservationNominator); ok {
-		ext.reservationNominatorPlugins = append(ext.reservationNominatorPlugins, r)
 	}
 	if r, ok := pl.(ReservationPreBindPlugin); ok {
 		ext.reservationPreBindPlugins = append(ext.reservationPreBindPlugins, r)
@@ -115,8 +129,14 @@ func (ext *frameworkExtenderImpl) updatePlugins(pl framework.Plugin) {
 	if r, ok := pl.(ReservationRestorePlugin); ok {
 		ext.reservationRestorePlugins = append(ext.reservationRestorePlugins, r)
 	}
+	if r, ok := pl.(ResizePodPlugin); ok {
+		ext.resizePodPlugins = append(ext.resizePodPlugins, r)
+	}
 	if p, ok := pl.(PreBindExtensions); ok {
 		ext.preBindExtensionsPlugins[p.Name()] = p
+	}
+	if p, ok := pl.(topologymanager.NUMATopologyHintProvider); ok {
+		ext.numaTopologyHintProviders = append(ext.numaTopologyHintProviders, p)
 	}
 }
 
@@ -137,6 +157,10 @@ func (ext *frameworkExtenderImpl) KoordinatorSharedInformerFactory() koordinator
 // nor are they allowed to hold the object within the plugin object.
 func (ext *frameworkExtenderImpl) Scheduler() Scheduler {
 	return ext.schedulerFn()
+}
+
+func (ext *frameworkExtenderImpl) GetReservationNominator() ReservationNominator {
+	return ext.reservationNominator
 }
 
 // RunPreFilterPlugins transforms the PreFilter phase of framework with pre-filter transformers.
@@ -201,6 +225,15 @@ func (ext *frameworkExtenderImpl) RunFilterPluginsWithNominatedPods(ctx context.
 	return status
 }
 
+func (ext *frameworkExtenderImpl) RunPostFilterPlugins(ctx context.Context, state *framework.CycleState, pod *corev1.Pod, filteredNodeStatusMap framework.NodeToStatusMap) (*framework.PostFilterResult, *framework.Status) {
+	result, status := ext.Framework.RunPostFilterPlugins(ctx, state, pod, filteredNodeStatusMap)
+	if result == nil || result.NominatingInfo.NominatedNodeName == "" {
+		ext.GetReservationNominator().RemoveNominatedReservations(pod)
+		ext.GetReservationNominator().DeleteNominatedReservePod(pod)
+	}
+	return result, status
+}
+
 func (ext *frameworkExtenderImpl) RunScorePlugins(ctx context.Context, state *framework.CycleState, pod *corev1.Pod, nodes []*corev1.Node) (framework.PluginToNodeScores, *framework.Status) {
 	for _, pl := range ext.configuredPlugins.Score.Enabled {
 		transformer := ext.scoreTransformers[pl.Name]
@@ -223,26 +256,6 @@ func (ext *frameworkExtenderImpl) RunScorePlugins(ctx context.Context, state *fr
 		debugScores(debugTopNScores, pod, pluginToNodeScores, nodes)
 	}
 	return pluginToNodeScores, status
-}
-
-// RunReservePluginsReserve supports trying to obtain the most suitable Reservation on the current node during the Reserve phase
-func (ext *frameworkExtenderImpl) RunReservePluginsReserve(ctx context.Context, cycleState *framework.CycleState, pod *corev1.Pod, nodeName string) *framework.Status {
-	if reservationutil.IsReservePod(pod) {
-		return ext.Framework.RunReservePluginsReserve(ctx, cycleState, pod, nodeName)
-	}
-
-	for _, pl := range ext.reservationNominatorPlugins {
-		reservation, status := pl.NominateReservation(ctx, cycleState, pod, nodeName)
-		if !status.IsSuccess() {
-			return status
-		}
-		if reservation != nil {
-			SetNominatedReservation(cycleState, reservation)
-			break
-		}
-	}
-
-	return ext.Framework.RunReservePluginsReserve(ctx, cycleState, pod, nodeName)
 }
 
 // RunPreBindPlugins supports PreBindReservation for Reservation
@@ -299,6 +312,13 @@ func (ext *frameworkExtenderImpl) runPreBindExtensionPlugins(ctx context.Context
 	return nil
 }
 
+func (ext *frameworkExtenderImpl) RunPostBindPlugins(ctx context.Context, state *framework.CycleState, pod *corev1.Pod, nodeName string) {
+	if ext.monitor != nil {
+		defer ext.monitor.Complete(pod)
+	}
+	ext.Framework.RunPostBindPlugins(ctx, state, pod, nodeName)
+}
+
 func (ext *frameworkExtenderImpl) RunReservationExtensionPreRestoreReservation(ctx context.Context, cycleState *framework.CycleState, pod *corev1.Pod) *framework.Status {
 	for _, pl := range ext.reservationRestorePlugins {
 		status := pl.PreRestoreReservation(ctx, cycleState, pod)
@@ -312,12 +332,15 @@ func (ext *frameworkExtenderImpl) RunReservationExtensionPreRestoreReservation(c
 
 // RunReservationExtensionRestoreReservation restores the Reservation during PreFilter phase
 func (ext *frameworkExtenderImpl) RunReservationExtensionRestoreReservation(ctx context.Context, cycleState *framework.CycleState, podToSchedule *corev1.Pod, matched []*ReservationInfo, unmatched []*ReservationInfo, nodeInfo *framework.NodeInfo) (PluginToReservationRestoreStates, *framework.Status) {
-	pluginToRestoreState := PluginToReservationRestoreStates{}
+	var pluginToRestoreState PluginToReservationRestoreStates
 	for _, pl := range ext.reservationRestorePlugins {
 		state, status := pl.RestoreReservation(ctx, cycleState, podToSchedule, matched, unmatched, nodeInfo)
 		if !status.IsSuccess() {
 			klog.ErrorS(status.AsError(), "Failed running RestoreReservation on plugin", "plugin", pl.Name(), "pod", klog.KObj(podToSchedule))
 			return nil, status
+		}
+		if pluginToRestoreState == nil {
+			pluginToRestoreState = PluginToReservationRestoreStates{}
 		}
 		pluginToRestoreState[pl.Name()] = state
 	}
@@ -344,7 +367,9 @@ func (ext *frameworkExtenderImpl) RunReservationFilterPlugins(ctx context.Contex
 	for _, pl := range ext.reservationFilterPlugins {
 		status := pl.FilterReservation(ctx, cycleState, pod, reservationInfo, nodeName)
 		if !status.IsSuccess() {
-			klog.Infof("Failed to FilterReservation for Pod %q with Reservation %q on Node %q, failedPlugin: %s, reason: %s", klog.KObj(pod), klog.KObj(reservationInfo), nodeName, pl.Name(), status.Message())
+			if debugFilterFailure {
+				klog.Infof("Failed to FilterReservation for Pod %q with Reservation %q on Node %q, failedPlugin: %s, reason: %s", klog.KObj(pod), klog.KObj(reservationInfo), nodeName, pl.Name(), status.Message())
+			}
 			return status
 		}
 	}
@@ -377,9 +402,19 @@ func (ext *frameworkExtenderImpl) RunReservationScorePlugins(ctx context.Context
 		}
 	}
 
-	// TODO: Should support score normalization
-	// TODO: Should support configure weight
+	for _, pl := range ext.reservationScorePlugins {
+		scoreExtensions := pl.ReservationScoreExtensions()
+		if scoreExtensions == nil {
+			continue
+		}
+		reservationScoreList := pluginToReservationScores[pl.Name()]
+		status := scoreExtensions.NormalizeReservationScore(ctx, cycleState, pod, reservationScoreList)
+		if !status.IsSuccess() {
+			return nil, framework.AsStatus(fmt.Errorf("running Normalize on Score plugins: %w", status.AsError()))
+		}
+	}
 
+	// TODO: Should support configure weight
 	for _, pl := range ext.reservationScorePlugins {
 		weight := 1
 		reservationScoreList := pluginToReservationScores[pl.Name()]
@@ -409,4 +444,51 @@ func (ext *frameworkExtenderImpl) ForgetPod(pod *corev1.Pod) error {
 		handler(pod)
 	}
 	return nil
+}
+
+func (ext *frameworkExtenderImpl) RunNUMATopologyManagerAdmit(ctx context.Context, cycleState *framework.CycleState, pod *corev1.Pod, nodeName string, numaNodes []int, policyType apiext.NUMATopologyPolicy) *framework.Status {
+	return ext.topologyManager.Admit(ctx, cycleState, pod, nodeName, numaNodes, policyType)
+}
+
+func (ext *frameworkExtenderImpl) GetNUMATopologyHintProvider() []topologymanager.NUMATopologyHintProvider {
+	return ext.numaTopologyHintProviders
+}
+
+func (ext *frameworkExtenderImpl) RunReservePluginsReserve(ctx context.Context, cycleState *framework.CycleState, pod *corev1.Pod, nodeName string) *framework.Status {
+	if k8sfeature.DefaultFeatureGate.Enabled(features.ResizePod) {
+		if isPodAssumed(cycleState) {
+			return nil
+		}
+	}
+	status := ext.Framework.RunReservePluginsReserve(ctx, cycleState, pod, nodeName)
+	ext.GetReservationNominator().RemoveNominatedReservations(pod)
+	ext.GetReservationNominator().DeleteNominatedReservePod(pod)
+	return status
+}
+
+func (ext *frameworkExtenderImpl) RunResizePod(ctx context.Context, cycleState *framework.CycleState, pod *corev1.Pod, nodeName string) *framework.Status {
+	for _, pl := range ext.resizePodPlugins {
+		status := pl.ResizePod(ctx, cycleState, pod, nodeName)
+		if !status.IsSuccess() {
+			return status
+		}
+	}
+	return nil
+}
+
+const podAssumedStateKey = "koordinator.sh/assumed"
+
+type assumedState struct{}
+
+func (s *assumedState) Clone() framework.StateData {
+	return s
+}
+
+func markPodAssumed(cycleState *framework.CycleState) {
+	cycleState.Write(podAssumedStateKey, &assumedState{})
+}
+
+func isPodAssumed(cycleState *framework.CycleState) bool {
+	assumed, _ := cycleState.Read(podAssumedStateKey)
+	return assumed != nil
 }

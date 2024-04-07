@@ -139,8 +139,8 @@ func (gang *Gang) tryInitByPodConfig(pod *v1.Pod, args *config.CoschedulingArgs)
 	gang.Mode = mode
 
 	matchPolicy := util.GetGangMatchPolicyByPod(pod)
-	if matchPolicy != extension.GangMatchPolicyOnlyWaiting && mode != extension.GangMatchPolicyWaitingAndRunning &&
-		mode != extension.GangMatchPolicyOnceSatisfied {
+	if matchPolicy != extension.GangMatchPolicyOnlyWaiting && matchPolicy != extension.GangMatchPolicyWaitingAndRunning &&
+		matchPolicy != extension.GangMatchPolicyOnceSatisfied {
 		klog.Errorf("pod's annotation AnnotationGangMatchPolicy illegal, gangName: %v, value: %v",
 			gang.Name, matchPolicy)
 		matchPolicy = extension.GangMatchPolicyOnceSatisfied
@@ -154,12 +154,7 @@ func (gang *Gang) tryInitByPodConfig(pod *v1.Pod, args *config.CoschedulingArgs)
 	if err != nil || waitTime <= 0 {
 		klog.Errorf("pod's annotation GangWaitTimeAnnotation illegal, gangName: %v, value: %v",
 			gang.Name, pod.Annotations[extension.AnnotationGangWaitTime])
-		if args.DefaultTimeout != nil {
-			waitTime = args.DefaultTimeout.Duration
-		} else {
-			klog.Errorf("gangArgs DefaultTimeoutSeconds is nil")
-			waitTime = 0
-		}
+		waitTime = args.DefaultTimeout.Duration
 	}
 	gang.WaitTime = waitTime
 
@@ -210,9 +205,9 @@ func (gang *Gang) tryInitByPodGroup(pg *v1alpha1.PodGroup, args *config.Coschedu
 	gang.Mode = mode
 
 	matchPolicy := pg.Annotations[extension.AnnotationGangMatchPolicy]
-	if matchPolicy != extension.GangMatchPolicyOnlyWaiting && mode != extension.GangMatchPolicyWaitingAndRunning &&
-		mode != extension.GangMatchPolicyOnceSatisfied {
-		klog.Errorf("pod's annotation AnnotationGangMatchPolicy illegal, gangName: %v, value: %v",
+	if matchPolicy != extension.GangMatchPolicyOnlyWaiting && matchPolicy != extension.GangMatchPolicyWaitingAndRunning &&
+		matchPolicy != extension.GangMatchPolicyOnceSatisfied {
+		klog.Errorf("podGroup's annotation AnnotationGangMatchPolicy illegal, gangName: %v, value: %v",
 			gang.Name, matchPolicy)
 		matchPolicy = extension.GangMatchPolicyOnceSatisfied
 	}

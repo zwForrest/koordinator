@@ -24,6 +24,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	slov1alpha1 "github.com/koordinator-sh/koordinator/apis/slo/v1alpha1"
 )
@@ -47,19 +48,6 @@ var (
 				},
 				ObjectMeta: metav1.ObjectMeta{Name: "node1"},
 			},
-			nodeMetric: &slov1alpha1.NodeMetric{
-				Status: slov1alpha1.NodeMetricStatus{
-					NodeMetric: &slov1alpha1.NodeMetricInfo{
-						NodeUsage: slov1alpha1.ResourceMap{
-							ResourceList: corev1.ResourceList{
-								corev1.ResourceCPU:    *resource.NewMilliQuantity(1730, resource.DecimalSI),
-								corev1.ResourceMemory: *resource.NewQuantity(3038982964, resource.BinarySI),
-								corev1.ResourcePods:   *resource.NewQuantity(25, resource.BinarySI),
-							},
-						},
-					},
-				},
-			},
 			usage: map[corev1.ResourceName]*resource.Quantity{
 				corev1.ResourceCPU:    resource.NewMilliQuantity(1730, resource.DecimalSI),
 				corev1.ResourceMemory: resource.NewQuantity(3038982964, resource.BinarySI),
@@ -75,19 +63,6 @@ var (
 				},
 				ObjectMeta: metav1.ObjectMeta{Name: "node2"},
 			},
-			nodeMetric: &slov1alpha1.NodeMetric{
-				Status: slov1alpha1.NodeMetricStatus{
-					NodeMetric: &slov1alpha1.NodeMetricInfo{
-						NodeUsage: slov1alpha1.ResourceMap{
-							ResourceList: corev1.ResourceList{
-								corev1.ResourceCPU:    *resource.NewMilliQuantity(1220, resource.DecimalSI),
-								corev1.ResourceMemory: *resource.NewQuantity(3038982964, resource.BinarySI),
-								corev1.ResourcePods:   *resource.NewQuantity(11, resource.BinarySI),
-							},
-						},
-					},
-				},
-			},
 			usage: map[corev1.ResourceName]*resource.Quantity{
 				corev1.ResourceCPU:    resource.NewMilliQuantity(1220, resource.DecimalSI),
 				corev1.ResourceMemory: resource.NewQuantity(3038982964, resource.BinarySI),
@@ -102,19 +77,6 @@ var (
 					Allocatable: testNodeAllocatable,
 				},
 				ObjectMeta: metav1.ObjectMeta{Name: "node3"},
-			},
-			nodeMetric: &slov1alpha1.NodeMetric{
-				Status: slov1alpha1.NodeMetricStatus{
-					NodeMetric: &slov1alpha1.NodeMetricInfo{
-						NodeUsage: slov1alpha1.ResourceMap{
-							ResourceList: corev1.ResourceList{
-								corev1.ResourceCPU:    *resource.NewMilliQuantity(1530, resource.DecimalSI),
-								corev1.ResourceMemory: *resource.NewQuantity(5038982964, resource.BinarySI),
-								corev1.ResourcePods:   *resource.NewQuantity(20, resource.BinarySI),
-							},
-						},
-					},
-				},
 			},
 			usage: map[corev1.ResourceName]*resource.Quantity{
 				corev1.ResourceCPU:    resource.NewMilliQuantity(1530, resource.DecimalSI),
@@ -187,4 +149,83 @@ func TestSortNodesByUsageAscendingOrder(t *testing.T) {
 	sortNodesByUsage(nodeList, weightMap, true)
 
 	assert.Equal(t, expectedNodeList, nodeList)
+}
+func TestSortPodsOnOneOverloadedNode(t *testing.T) {
+	nodeInfo := NodeInfo{
+		NodeUsage: &NodeUsage{
+			node: &corev1.Node{
+				Status: corev1.NodeStatus{
+					Allocatable: testNodeAllocatable,
+				},
+				ObjectMeta: metav1.ObjectMeta{Name: "node0"},
+			},
+			// only make cpu overused
+			usage: map[corev1.ResourceName]*resource.Quantity{
+				corev1.ResourceCPU:    resource.NewMilliQuantity(30000, resource.DecimalSI),
+				corev1.ResourceMemory: resource.NewQuantity(998244353, resource.BinarySI),
+			},
+			podMetrics: map[types.NamespacedName]*slov1alpha1.ResourceMap{
+				{
+					Namespace: "ns",
+					Name:      "pod1",
+				}: {
+					ResourceList: corev1.ResourceList{
+						corev1.ResourceCPU:    *resource.NewMilliQuantity(1000, resource.DecimalSI),
+						corev1.ResourceMemory: *resource.NewQuantity(27487790694, resource.BinarySI),
+					},
+				},
+				{
+					Namespace: "ns",
+					Name:      "pod2",
+				}: {
+					ResourceList: corev1.ResourceList{
+						corev1.ResourceCPU:    *resource.NewMilliQuantity(3000, resource.DecimalSI),
+						corev1.ResourceMemory: *resource.NewQuantity(27487790694, resource.BinarySI),
+					},
+				},
+				{
+					Namespace: "ns",
+					Name:      "pod3",
+				}: {
+					ResourceList: corev1.ResourceList{
+						corev1.ResourceCPU:    *resource.NewMilliQuantity(2000, resource.DecimalSI),
+						corev1.ResourceMemory: *resource.NewQuantity(1, resource.BinarySI),
+					},
+				},
+				{
+					Namespace: "ns",
+					Name:      "pod4",
+				}: {
+					ResourceList: corev1.ResourceList{
+						corev1.ResourceCPU:    *resource.NewMilliQuantity(4000, resource.DecimalSI),
+						corev1.ResourceMemory: *resource.NewQuantity(1, resource.BinarySI),
+					},
+				},
+			},
+		},
+		thresholds: NodeThresholds{
+			lowResourceThreshold: nil,
+			highResourceThreshold: map[corev1.ResourceName]*resource.Quantity{
+				corev1.ResourceCPU:    resource.NewMilliQuantity(20000, resource.DecimalSI),
+				corev1.ResourceMemory: resource.NewQuantity(27487790694, resource.BinarySI),
+			},
+		},
+	}
+	removablePods := []*corev1.Pod{
+		{ObjectMeta: metav1.ObjectMeta{Name: "pod1", Namespace: "ns"}, Spec: corev1.PodSpec{NodeName: "node0"}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "pod2", Namespace: "ns"}, Spec: corev1.PodSpec{NodeName: "node0"}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "pod3", Namespace: "ns"}, Spec: corev1.PodSpec{NodeName: "node0"}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "pod4", Namespace: "ns"}, Spec: corev1.PodSpec{NodeName: "node0"}},
+	}
+	expectedResult := make([]*corev1.Pod, 4)
+	expectedResult[0] = removablePods[3]
+	expectedResult[1] = removablePods[1]
+	expectedResult[2] = removablePods[2]
+	expectedResult[3] = removablePods[0]
+	resourceWeights := map[corev1.ResourceName]int64{
+		corev1.ResourceCPU:    int64(1),
+		corev1.ResourceMemory: int64(1),
+	}
+	sortPodsOnOneOverloadedNode(nodeInfo, removablePods, resourceWeights)
+	assert.Equal(t, expectedResult, removablePods)
 }

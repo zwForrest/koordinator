@@ -144,7 +144,7 @@ func (s *statesInformer) buildGPUDevice() []schedulingv1alpha1.DeviceInfo {
 	//queryParam := generateQueryParam()
 	gpuDeviceInfo, exist := s.metricsCache.Get(koordletuti.GPUDeviceType)
 	if !exist {
-		klog.Error("gpu device not exist")
+		klog.V(4).Infof("gpu device not exist")
 		return nil
 	}
 	gpus, ok := gpuDeviceInfo.(koordletuti.GPUDevices)
@@ -162,6 +162,17 @@ func (s *statesInformer) buildGPUDevice() []schedulingv1alpha1.DeviceInfo {
 			health = false
 		}
 		s.gpuMutex.RUnlock()
+
+		var topology *schedulingv1alpha1.DeviceTopology
+		if gpu.NodeID >= 0 && gpu.PCIE != "" && gpu.BusID != "" {
+			topology = &schedulingv1alpha1.DeviceTopology{
+				SocketID: -1,
+				NodeID:   gpu.NodeID,
+				PCIEID:   gpu.PCIE,
+				BusID:    gpu.BusID,
+			}
+		}
+
 		deviceInfos = append(deviceInfos, schedulingv1alpha1.DeviceInfo{
 			UUID:   gpu.UUID,
 			Minor:  &gpu.Minor,
@@ -172,6 +183,7 @@ func (s *statesInformer) buildGPUDevice() []schedulingv1alpha1.DeviceInfo {
 				extension.ResourceGPUMemory:      *resource.NewQuantity(int64(gpu.MemoryTotal), resource.BinarySI),
 				extension.ResourceGPUMemoryRatio: *resource.NewQuantity(100, resource.DecimalSI),
 			},
+			Topology: topology,
 		})
 	}
 	return deviceInfos

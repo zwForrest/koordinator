@@ -331,6 +331,7 @@ we will also add new annotation and labels to achieve our desired functionality.
 annotations:
   quota.scheduling.koordinator.sh/runtime: {cpu:4, memory: 8Gi}
   quota.scheduling.koordinator.sh/shared-weight: {cpu:4, memory: 8Gi}
+  quota.scheduling.koordinator.sh/namespaces: "[\"namespace1\",\"namespace2\"]"
 labels:
   quota.scheduling.koordinator.sh/is-parent: false
   quota.scheduling.koordinator.sh/parent-quota-name: "parent"
@@ -341,8 +342,8 @@ labels:
 - `quota.scheduling.koordinator.sh/parent-quota-name` is disposed by the user. It reflects the parent quota name. Default is root.
 - `quota.scheduling.koordinator.sh/shared-weight` is disposed by the user. It reflects the ability to share the "lent to" resource. Default equals to "max".
 - `quota.scheduling.koordinator.sh/allow-lent-resource` is disposed by the user. It reflects whether quota group allows lent unused "min" to others.
-
-Here is a example:
+- `quota.scheduling.koordinator.sh/namespaces` is disposed by the user in need. It reflects the pod in the namespaces are bound to the quota, namespaces of quota should be different. The namespaces' definition is list of string.
+Here is an example:
 ```yaml
 apiVersion: scheduling.sigs.k8s.io/v1alpha1
 kind: ElasticQuota
@@ -352,6 +353,7 @@ metadata:
   annotations:
     quota.scheduling.koordinator.sh/runtime: {cpu:4, memory: 8Gi}
     quota.scheduling.koordinator.sh/shared-weight: {cpu:4, memory: 8Gi}
+    quota.scheduling.koordinator.sh/namespaces: "[\"namespace1\",\"namespace2\"]"
   labels:
     quota.scheduling.koordinator.sh/is-parent: false
     quota.scheduling.koordinator.sh/parent-quota-name: "parent"
@@ -371,7 +373,7 @@ spec:
 We introduce a new label on the pod to associate pod with quota group:
 ```yaml
 labels:
-  quota.scheduling.koordinator.sh/quota-name: "test1"
+  quota.scheduling.koordinator.sh/name: "test1"
 ```
 
 if pod's don't have the label, we will follow [Elastic Quota](https://github.com/kubernetes-sigs/scheduler-plugins/blob/master/kep/9-capacity-scheduling/README.md#goals)
@@ -379,9 +381,9 @@ using namespace to associate pod with quota group.
 
 ### Compatibility
 We are fully compatible with [Elastic Quota](https://github.com/kubernetes-sigs/scheduler-plugins/blob/master/kep/9-capacity-scheduling/README.md#goals) 's interface.
-If pod's don't have the "quota-name" label, we will use the namespace to associate pod with quota group. If the pod has 
-the "quota-name" label, we will use it to associate pod with quota group instead of namespace. If we can't find the 
-matched quota group, we force the pod to associate with the "default-group". 
+If pod's don't have the "name" label, we will use the namespace to associate pod with quota group. If the pod has the "name" label, 
+we will use it to associate pod with quota group instead of namespace. If we can't find the matched quota group, we force the pod to 
+associate with the "default-group". 
 
 ## Unsolved Problems
 Please see Non-goals/Future work.

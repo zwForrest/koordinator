@@ -31,15 +31,17 @@ import (
 	"k8s.io/client-go/tools/record"
 	"k8s.io/utils/pointer"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	"github.com/koordinator-sh/koordinator/apis/configuration"
 	"github.com/koordinator-sh/koordinator/apis/extension"
 	schedulingv1alpha1 "github.com/koordinator-sh/koordinator/apis/scheduling/v1alpha1"
 	slov1alpha1 "github.com/koordinator-sh/koordinator/apis/slo/v1alpha1"
 	"github.com/koordinator-sh/koordinator/pkg/slo-controller/noderesource/framework"
 )
 
-func Test_NodeResourceController_ConfigNotAvaliable(t *testing.T) {
+func Test_NodeResourceController_ConfigNotAvailable(t *testing.T) {
 	r := &NodeResourceReconciler{
 		cfgCache: &FakeCfgCache{
 			available: false,
@@ -95,8 +97,8 @@ func Test_NodeResourceController_NodeMetricNotExist(t *testing.T) {
 		Client: client,
 		cfgCache: &FakeCfgCache{
 			available: true,
-			cfg: extension.ColocationCfg{
-				ColocationStrategy: extension.ColocationStrategy{
+			cfg: configuration.ColocationCfg{
+				ColocationStrategy: configuration.ColocationStrategy{
 					Enable:                        pointer.Bool(true),
 					CPUReclaimThresholdPercent:    pointer.Int64(65),
 					MemoryReclaimThresholdPercent: pointer.Int64(65),
@@ -122,6 +124,9 @@ func Test_NodeResourceController_NodeMetricNotExist(t *testing.T) {
 	key := types.NamespacedName{Name: nodeName}
 	nodeReq := ctrl.Request{NamespacedName: key}
 
+	opt := framework.NewOption().WithClient(client).WithScheme(scheme).WithControllerBuilder(&builder.Builder{})
+	framework.RunSetupExtenders(opt)
+
 	result, err := r.Reconcile(ctx, nodeReq)
 	assert.NoError(t, err)
 	assert.Equal(t, false, result.Requeue)
@@ -137,8 +142,8 @@ func Test_NodeResourceController_ColocationEnabled(t *testing.T) {
 		Client: client,
 		cfgCache: &FakeCfgCache{
 			available: true,
-			cfg: extension.ColocationCfg{
-				ColocationStrategy: extension.ColocationStrategy{
+			cfg: configuration.ColocationCfg{
+				ColocationStrategy: configuration.ColocationStrategy{
 					Enable:                        pointer.Bool(true),
 					CPUReclaimThresholdPercent:    pointer.Int64(65),
 					MemoryReclaimThresholdPercent: pointer.Int64(65),

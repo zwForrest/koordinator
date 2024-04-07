@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package sloconfig
 
 import (
@@ -23,16 +24,18 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/pointer"
 
-	"github.com/koordinator-sh/koordinator/apis/extension"
+	"github.com/koordinator-sh/koordinator/apis/configuration"
 	slov1alpha1 "github.com/koordinator-sh/koordinator/apis/slo/v1alpha1"
 )
 
 func Test_ResourceQOS_NewChecker_InitStatus(t *testing.T) {
 	//clusterOnly
-	cfgClusterOnly := &extension.ResourceQOSCfg{
+	cfgClusterOnly := &configuration.ResourceQOSCfg{
 		ClusterStrategy: &slov1alpha1.ResourceQOSStrategy{
 			BEClass: &slov1alpha1.ResourceQOS{
 				CPUQOS: &slov1alpha1.CPUQOSCfg{
@@ -45,7 +48,7 @@ func Test_ResourceQOS_NewChecker_InitStatus(t *testing.T) {
 	}
 	cfgClusterOnlyBytes, _ := json.Marshal(cfgClusterOnly)
 	//nodeSelector is empty
-	cfgHaveNodeInvalid := &extension.ResourceQOSCfg{
+	cfgHaveNodeInvalid := &configuration.ResourceQOSCfg{
 		ClusterStrategy: &slov1alpha1.ResourceQOSStrategy{
 			BEClass: &slov1alpha1.ResourceQOS{
 				CPUQOS: &slov1alpha1.CPUQOSCfg{
@@ -55,9 +58,9 @@ func Test_ResourceQOS_NewChecker_InitStatus(t *testing.T) {
 				},
 			},
 		},
-		NodeStrategies: []extension.NodeResourceQOSStrategy{
+		NodeStrategies: []configuration.NodeResourceQOSStrategy{
 			{
-				NodeCfgProfile: extension.NodeCfgProfile{
+				NodeCfgProfile: configuration.NodeCfgProfile{
 					Name: "xxx-yyy",
 				},
 				ResourceQOSStrategy: &slov1alpha1.ResourceQOSStrategy{
@@ -75,7 +78,7 @@ func Test_ResourceQOS_NewChecker_InitStatus(t *testing.T) {
 	cfgHaveNodeInvalidBytes, _ := json.Marshal(cfgHaveNodeInvalid)
 
 	//valid node config
-	cfgHaveNodeValid := &extension.ResourceQOSCfg{
+	cfgHaveNodeValid := &configuration.ResourceQOSCfg{
 		ClusterStrategy: &slov1alpha1.ResourceQOSStrategy{
 			BEClass: &slov1alpha1.ResourceQOS{
 				CPUQOS: &slov1alpha1.CPUQOSCfg{
@@ -85,9 +88,9 @@ func Test_ResourceQOS_NewChecker_InitStatus(t *testing.T) {
 				},
 			},
 		},
-		NodeStrategies: []extension.NodeResourceQOSStrategy{
+		NodeStrategies: []configuration.NodeResourceQOSStrategy{
 			{
-				NodeCfgProfile: extension.NodeCfgProfile{
+				NodeCfgProfile: configuration.NodeCfgProfile{
 					Name: "xxx-yyy",
 					NodeSelector: &metav1.LabelSelector{
 						MatchLabels: map[string]string{
@@ -108,6 +111,14 @@ func Test_ResourceQOS_NewChecker_InitStatus(t *testing.T) {
 		},
 	}
 	cfgHaveNodeValidBytes, _ := json.Marshal(cfgHaveNodeValid)
+
+	validSysCfg := &configuration.SystemCfg{
+		ClusterStrategy: &slov1alpha1.SystemStrategy{
+			TotalNetworkBandwidth: resource.MustParse("1000M"),
+		},
+	}
+	validSysCfgBytes, _ := json.Marshal(validSysCfg)
+
 	nodeSelectorExpect, _ := metav1.LabelSelectorAsSelector(cfgHaveNodeValid.NodeStrategies[0].NodeCfgProfile.NodeSelector)
 
 	type args struct {
@@ -119,7 +130,7 @@ func Test_ResourceQOS_NewChecker_InitStatus(t *testing.T) {
 	tests := []struct {
 		name               string
 		args               args
-		wantCfg            *extension.ResourceQOSCfg
+		wantCfg            *configuration.ResourceQOSCfg
 		wantProfileChecker NodeConfigProfileChecker
 		wantStatus         string
 	}{
@@ -151,7 +162,7 @@ func Test_ResourceQOS_NewChecker_InitStatus(t *testing.T) {
 			args: args{
 				configMap: &corev1.ConfigMap{
 					Data: map[string]string{
-						extension.ResourceQOSConfigKey: "invalid config",
+						configuration.ResourceQOSConfigKey: "invalid config",
 					},
 				},
 			},
@@ -164,12 +175,12 @@ func Test_ResourceQOS_NewChecker_InitStatus(t *testing.T) {
 			args: args{
 				oldConfigMap: &corev1.ConfigMap{
 					Data: map[string]string{
-						extension.ResourceQOSConfigKey: "invalid config",
+						configuration.ResourceQOSConfigKey: "invalid config",
 					},
 				},
 				configMap: &corev1.ConfigMap{
 					Data: map[string]string{
-						extension.ResourceQOSConfigKey: "invalid config",
+						configuration.ResourceQOSConfigKey: "invalid config",
 					},
 				},
 			},
@@ -182,12 +193,13 @@ func Test_ResourceQOS_NewChecker_InitStatus(t *testing.T) {
 			args: args{
 				configMap: &corev1.ConfigMap{
 					Data: map[string]string{
-						extension.ResourceQOSConfigKey: string(cfgClusterOnlyBytes),
+						configuration.ResourceQOSConfigKey: string(cfgClusterOnlyBytes),
+						configuration.SystemConfigKey:      string(validSysCfgBytes),
 					},
 				},
 			},
 			wantCfg:            cfgClusterOnly,
-			wantProfileChecker: &nodeConfigProfileChecker{cfgName: extension.ResourceQOSConfigKey},
+			wantProfileChecker: &nodeConfigProfileChecker{cfgName: configuration.ResourceQOSConfigKey},
 			wantStatus:         InitSuccess,
 		},
 		{
@@ -195,7 +207,7 @@ func Test_ResourceQOS_NewChecker_InitStatus(t *testing.T) {
 			args: args{
 				configMap: &corev1.ConfigMap{
 					Data: map[string]string{
-						extension.ResourceQOSConfigKey: string(cfgHaveNodeInvalidBytes),
+						configuration.ResourceQOSConfigKey: string(cfgHaveNodeInvalidBytes),
 					},
 				},
 			},
@@ -208,13 +220,14 @@ func Test_ResourceQOS_NewChecker_InitStatus(t *testing.T) {
 			args: args{
 				configMap: &corev1.ConfigMap{
 					Data: map[string]string{
-						extension.ResourceQOSConfigKey: string(cfgHaveNodeValidBytes),
+						configuration.ResourceQOSConfigKey: string(cfgHaveNodeValidBytes),
+						configuration.SystemConfigKey:      string(validSysCfgBytes),
 					},
 				},
 			},
 			wantCfg: cfgHaveNodeValid,
 			wantProfileChecker: &nodeConfigProfileChecker{
-				cfgName: extension.ResourceQOSConfigKey,
+				cfgName: configuration.ResourceQOSConfigKey,
 				nodeConfigs: []profileCheckInfo{
 					{
 						profile:   cfgHaveNodeValid.NodeStrategies[0].NodeCfgProfile,
@@ -240,7 +253,18 @@ func Test_ResourceQOS_NewChecker_InitStatus(t *testing.T) {
 func Test_ResourceQOS_ConfigContentsValid(t *testing.T) {
 
 	type args struct {
-		cfg extension.ResourceQOSCfg
+		cfg    configuration.ResourceQOSCfg
+		sysCfg configuration.SystemCfg
+	}
+
+	fromInt := func(in int) *intstr.IntOrString {
+		res := intstr.FromInt(in)
+		return &res
+	}
+
+	fromString := func(in string) *intstr.IntOrString {
+		res := intstr.FromString(in)
+		return &res
 	}
 
 	tests := []struct {
@@ -251,7 +275,7 @@ func Test_ResourceQOS_ConfigContentsValid(t *testing.T) {
 		{
 			name: "cluster CPUQOS GroupIdentity invalid",
 			args: args{
-				cfg: extension.ResourceQOSCfg{
+				cfg: configuration.ResourceQOSCfg{
 					ClusterStrategy: &slov1alpha1.ResourceQOSStrategy{
 						BEClass: &slov1alpha1.ResourceQOS{
 							CPUQOS: &slov1alpha1.CPUQOSCfg{
@@ -268,7 +292,7 @@ func Test_ResourceQOS_ConfigContentsValid(t *testing.T) {
 		{
 			name: "cluster MemoryQOS OomKillGroup invalid",
 			args: args{
-				cfg: extension.ResourceQOSCfg{
+				cfg: configuration.ResourceQOSCfg{
 					ClusterStrategy: &slov1alpha1.ResourceQOSStrategy{
 						BEClass: &slov1alpha1.ResourceQOS{
 							MemoryQOS: &slov1alpha1.MemoryQOSCfg{
@@ -285,7 +309,7 @@ func Test_ResourceQOS_ConfigContentsValid(t *testing.T) {
 		{
 			name: "cluster ResctrlQOS CATRangeStartPercent invalid",
 			args: args{
-				cfg: extension.ResourceQOSCfg{
+				cfg: configuration.ResourceQOSCfg{
 					ClusterStrategy: &slov1alpha1.ResourceQOSStrategy{
 						BEClass: &slov1alpha1.ResourceQOS{
 							ResctrlQOS: &slov1alpha1.ResctrlQOSCfg{
@@ -302,9 +326,9 @@ func Test_ResourceQOS_ConfigContentsValid(t *testing.T) {
 		{
 			name: "node ResctrlQOS CATRangeStartPercent invalid",
 			args: args{
-				cfg: extension.ResourceQOSCfg{
+				cfg: configuration.ResourceQOSCfg{
 					ClusterStrategy: &slov1alpha1.ResourceQOSStrategy{},
-					NodeStrategies: []extension.NodeResourceQOSStrategy{
+					NodeStrategies: []configuration.NodeResourceQOSStrategy{
 						{
 							ResourceQOSStrategy: &slov1alpha1.ResourceQOSStrategy{
 								BEClass: &slov1alpha1.ResourceQOS{
@@ -324,24 +348,25 @@ func Test_ResourceQOS_ConfigContentsValid(t *testing.T) {
 		{
 			name: "all is nil",
 			args: args{
-				cfg: extension.ResourceQOSCfg{
+				cfg: configuration.ResourceQOSCfg{
 					ClusterStrategy: &slov1alpha1.ResourceQOSStrategy{},
-					NodeStrategies: []extension.NodeResourceQOSStrategy{
+					NodeStrategies: []configuration.NodeResourceQOSStrategy{
 						{
-							NodeCfgProfile: extension.NodeCfgProfile{
+							NodeCfgProfile: configuration.NodeCfgProfile{
 								Name: "testNode",
 							},
 							ResourceQOSStrategy: &slov1alpha1.ResourceQOSStrategy{},
 						},
 					},
 				},
+				sysCfg: configuration.SystemCfg{},
 			},
 			wantErr: false,
 		},
 		{
 			name: "config valid",
 			args: args{
-				cfg: extension.ResourceQOSCfg{
+				cfg: configuration.ResourceQOSCfg{
 					ClusterStrategy: &slov1alpha1.ResourceQOSStrategy{
 						BEClass: &slov1alpha1.ResourceQOS{
 							CPUQOS: &slov1alpha1.CPUQOSCfg{
@@ -351,9 +376,9 @@ func Test_ResourceQOS_ConfigContentsValid(t *testing.T) {
 							},
 						},
 					},
-					NodeStrategies: []extension.NodeResourceQOSStrategy{
+					NodeStrategies: []configuration.NodeResourceQOSStrategy{
 						{
-							NodeCfgProfile: extension.NodeCfgProfile{
+							NodeCfgProfile: configuration.NodeCfgProfile{
 								Name: "xxx-yyy",
 								NodeSelector: &metav1.LabelSelector{
 									MatchLabels: map[string]string{
@@ -376,11 +401,305 @@ func Test_ResourceQOS_ConfigContentsValid(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "netqos config not valid for percentage less than 0",
+			args: args{
+				cfg: configuration.ResourceQOSCfg{
+					ClusterStrategy: &slov1alpha1.ResourceQOSStrategy{
+						LSRClass: &slov1alpha1.ResourceQOS{
+							NetworkQOS: &slov1alpha1.NetworkQOSCfg{
+								NetworkQOS: slov1alpha1.NetworkQOS{
+									IngressRequest: fromInt(-1),
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "netqos config not valid for percentage more than 100",
+			args: args{
+				cfg: configuration.ResourceQOSCfg{
+					ClusterStrategy: &slov1alpha1.ResourceQOSStrategy{
+						LSRClass: &slov1alpha1.ResourceQOS{
+							NetworkQOS: &slov1alpha1.NetworkQOSCfg{
+								NetworkQOS: slov1alpha1.NetworkQOS{
+									IngressRequest: fromInt(101),
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "netqos config percentage format is valid",
+			args: args{
+				cfg: configuration.ResourceQOSCfg{
+					ClusterStrategy: &slov1alpha1.ResourceQOSStrategy{
+						LSRClass: &slov1alpha1.ResourceQOS{
+							NetworkQOS: &slov1alpha1.NetworkQOSCfg{
+								NetworkQOS: slov1alpha1.NetworkQOS{
+									IngressRequest: fromInt(50),
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "netqos config quantity format invalid",
+			args: args{
+				cfg: configuration.ResourceQOSCfg{
+					ClusterStrategy: &slov1alpha1.ResourceQOSStrategy{
+						LSRClass: &slov1alpha1.ResourceQOS{
+							NetworkQOS: &slov1alpha1.NetworkQOSCfg{
+								NetworkQOS: slov1alpha1.NetworkQOS{
+									IngressRequest: fromString("50a"),
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "netqos config quantity format is nil",
+			args: args{
+				cfg: configuration.ResourceQOSCfg{
+					ClusterStrategy: &slov1alpha1.ResourceQOSStrategy{
+						LSRClass: &slov1alpha1.ResourceQOS{
+							NetworkQOS: &slov1alpha1.NetworkQOSCfg{
+								NetworkQOS: slov1alpha1.NetworkQOS{
+									IngressRequest: fromString(""),
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "netqos config quantity format valid",
+			args: args{
+				cfg: configuration.ResourceQOSCfg{
+					ClusterStrategy: &slov1alpha1.ResourceQOSStrategy{
+						LSRClass: &slov1alpha1.ResourceQOS{
+							NetworkQOS: &slov1alpha1.NetworkQOSCfg{
+								NetworkQOS: slov1alpha1.NetworkQOS{
+									IngressRequest: fromString("50m"),
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "cluster net bandwidth total percentage over 100",
+			args: args{
+				cfg: configuration.ResourceQOSCfg{
+					ClusterStrategy: &slov1alpha1.ResourceQOSStrategy{
+						LSRClass: &slov1alpha1.ResourceQOS{
+							NetworkQOS: &slov1alpha1.NetworkQOSCfg{
+								NetworkQOS: slov1alpha1.NetworkQOS{
+									IngressRequest: fromInt(50),
+								},
+							},
+						},
+						LSClass: &slov1alpha1.ResourceQOS{
+							NetworkQOS: &slov1alpha1.NetworkQOSCfg{
+								NetworkQOS: slov1alpha1.NetworkQOS{
+									IngressRequest: fromInt(60),
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "node net bandwidth total percentage over 100",
+			args: args{
+				cfg: configuration.ResourceQOSCfg{
+					NodeStrategies: []configuration.NodeResourceQOSStrategy{
+						{
+							NodeCfgProfile: configuration.NodeCfgProfile{},
+							ResourceQOSStrategy: &slov1alpha1.ResourceQOSStrategy{
+								LSRClass: &slov1alpha1.ResourceQOS{
+									NetworkQOS: &slov1alpha1.NetworkQOSCfg{
+										NetworkQOS: slov1alpha1.NetworkQOS{
+											IngressRequest: fromInt(50),
+										},
+									},
+								},
+								LSClass: &slov1alpha1.ResourceQOS{
+									NetworkQOS: &slov1alpha1.NetworkQOSCfg{
+										NetworkQOS: slov1alpha1.NetworkQOS{
+											IngressRequest: fromInt(60),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "node net bandwidth total quantity over total net bandwidth",
+			args: args{
+				cfg: configuration.ResourceQOSCfg{
+					NodeStrategies: []configuration.NodeResourceQOSStrategy{
+						{
+							NodeCfgProfile: configuration.NodeCfgProfile{
+								NodeSelector: &metav1.LabelSelector{
+									MatchLabels: map[string]string{
+										"xxx": "yyy",
+									},
+								},
+							},
+							ResourceQOSStrategy: &slov1alpha1.ResourceQOSStrategy{
+								LSRClass: &slov1alpha1.ResourceQOS{
+									NetworkQOS: &slov1alpha1.NetworkQOSCfg{
+										NetworkQOS: slov1alpha1.NetworkQOS{
+											IngressRequest: fromString("500M"),
+										},
+									},
+								},
+								LSClass: &slov1alpha1.ResourceQOS{
+									NetworkQOS: &slov1alpha1.NetworkQOSCfg{
+										NetworkQOS: slov1alpha1.NetworkQOS{
+											IngressRequest: fromString("600M"),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+				sysCfg: configuration.SystemCfg{
+					NodeStrategies: []configuration.NodeSystemStrategy{
+						{
+							NodeCfgProfile: configuration.NodeCfgProfile{
+								NodeSelector: &metav1.LabelSelector{
+									MatchLabels: map[string]string{
+										"xxx": "yyy",
+									},
+								},
+							},
+							SystemStrategy: &slov1alpha1.SystemStrategy{
+								TotalNetworkBandwidth: resource.MustParse("1000M"),
+							},
+						},
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "cluster net bandwidth total quantity over total net bandwidth",
+			args: args{
+				cfg: configuration.ResourceQOSCfg{
+					ClusterStrategy: &slov1alpha1.ResourceQOSStrategy{
+						LSRClass: &slov1alpha1.ResourceQOS{
+							NetworkQOS: &slov1alpha1.NetworkQOSCfg{
+								NetworkQOS: slov1alpha1.NetworkQOS{
+									IngressRequest: fromString("500M"),
+								},
+							},
+						},
+						LSClass: &slov1alpha1.ResourceQOS{
+							NetworkQOS: &slov1alpha1.NetworkQOSCfg{
+								NetworkQOS: slov1alpha1.NetworkQOS{
+									IngressRequest: fromString("600M"),
+								},
+							},
+						},
+					},
+				},
+				sysCfg: configuration.SystemCfg{
+					ClusterStrategy: &slov1alpha1.SystemStrategy{
+						TotalNetworkBandwidth: resource.MustParse("1000M"),
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "only one format can be used in cluster strategy",
+			args: args{
+				cfg: configuration.ResourceQOSCfg{
+					ClusterStrategy: &slov1alpha1.ResourceQOSStrategy{
+						LSRClass: &slov1alpha1.ResourceQOS{
+							NetworkQOS: &slov1alpha1.NetworkQOSCfg{
+								NetworkQOS: slov1alpha1.NetworkQOS{
+									IngressRequest: fromString("500M"),
+								},
+							},
+						},
+						LSClass: &slov1alpha1.ResourceQOS{
+							NetworkQOS: &slov1alpha1.NetworkQOSCfg{
+								NetworkQOS: slov1alpha1.NetworkQOS{
+									IngressRequest: fromInt(60),
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "only one format can be used in node strategy",
+			args: args{
+				cfg: configuration.ResourceQOSCfg{
+					NodeStrategies: []configuration.NodeResourceQOSStrategy{
+						{
+							NodeCfgProfile: configuration.NodeCfgProfile{
+								NodeSelector: &metav1.LabelSelector{
+									MatchLabels: map[string]string{
+										"xxx": "yyy",
+									},
+								},
+							},
+							ResourceQOSStrategy: &slov1alpha1.ResourceQOSStrategy{
+								LSRClass: &slov1alpha1.ResourceQOS{
+									NetworkQOS: &slov1alpha1.NetworkQOSCfg{
+										NetworkQOS: slov1alpha1.NetworkQOS{
+											IngressRequest: fromString("500M"),
+										},
+									},
+								},
+								LSClass: &slov1alpha1.ResourceQOS{
+									NetworkQOS: &slov1alpha1.NetworkQOSCfg{
+										NetworkQOS: slov1alpha1.NetworkQOS{
+											IngressRequest: fromString("60"),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			checker := ResourceQOSChecker{cfg: &tt.args.cfg}
+			checker := ResourceQOSChecker{cfg: &tt.args.cfg, sysCfg: &tt.args.sysCfg}
 			gotErr := checker.ConfigParamValid()
 			if gotErr != nil {
 				fmt.Println(gotErr.Error())

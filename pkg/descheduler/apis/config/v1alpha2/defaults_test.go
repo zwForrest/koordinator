@@ -38,8 +38,26 @@ func TestSetDefaults_LowNodeLoadArgs(t *testing.T) {
 				NodeFit: pointer.Bool(false),
 			},
 			expected: &LowNodeLoadArgs{
-				NodeFit:          pointer.Bool(false),
-				AnomalyCondition: defaultLoadAnomalyCondition,
+				NodeFit:                     pointer.Bool(false),
+				NodeMetricExpirationSeconds: pointer.Int64(defaultNodeMetricExpirationSeconds),
+				AnomalyCondition:            defaultLoadAnomalyCondition,
+				DetectorCacheTimeout:        &metav1.Duration{Duration: 5 * time.Minute},
+				ResourceWeights: map[corev1.ResourceName]int64{
+					corev1.ResourceCPU:    1,
+					corev1.ResourceMemory: 1,
+				},
+			},
+		},
+		{
+			name: "set detectorCacheTimeout",
+			args: &LowNodeLoadArgs{
+				DetectorCacheTimeout: &metav1.Duration{Duration: 10 * time.Minute},
+			},
+			expected: &LowNodeLoadArgs{
+				NodeFit:                     pointer.Bool(true),
+				NodeMetricExpirationSeconds: pointer.Int64(defaultNodeMetricExpirationSeconds),
+				AnomalyCondition:            defaultLoadAnomalyCondition,
+				DetectorCacheTimeout:        &metav1.Duration{Duration: 10 * time.Minute},
 				ResourceWeights: map[corev1.ResourceName]int64{
 					corev1.ResourceCPU:    1,
 					corev1.ResourceMemory: 1,
@@ -56,12 +74,14 @@ func TestSetDefaults_LowNodeLoadArgs(t *testing.T) {
 				},
 			},
 			expected: &LowNodeLoadArgs{
-				NodeFit: pointer.Bool(true),
+				NodeFit:                     pointer.Bool(true),
+				NodeMetricExpirationSeconds: pointer.Int64(defaultNodeMetricExpirationSeconds),
 				AnomalyCondition: &LoadAnomalyCondition{
 					Timeout:                  &metav1.Duration{Duration: 10 * time.Second},
 					ConsecutiveAbnormalities: defaultLoadAnomalyCondition.ConsecutiveAbnormalities,
 					ConsecutiveNormalities:   3,
 				},
+				DetectorCacheTimeout: &metav1.Duration{Duration: 5 * time.Minute},
 				ResourceWeights: map[corev1.ResourceName]int64{
 					corev1.ResourceCPU:    1,
 					corev1.ResourceMemory: 1,
@@ -82,8 +102,10 @@ func TestSetDefaults_LowNodeLoadArgs(t *testing.T) {
 				},
 			},
 			expected: &LowNodeLoadArgs{
-				NodeFit:          pointer.Bool(true),
-				AnomalyCondition: defaultLoadAnomalyCondition,
+				NodeFit:                     pointer.Bool(true),
+				NodeMetricExpirationSeconds: pointer.Int64(defaultNodeMetricExpirationSeconds),
+				AnomalyCondition:            defaultLoadAnomalyCondition,
+				DetectorCacheTimeout:        &metav1.Duration{Duration: 5 * time.Minute},
 				LowThresholds: ResourceThresholds{
 					corev1.ResourceCPU:    30,
 					corev1.ResourceMemory: 30,

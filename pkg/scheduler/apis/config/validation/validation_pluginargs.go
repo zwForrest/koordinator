@@ -22,6 +22,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	schedconfig "k8s.io/kubernetes/pkg/scheduler/apis/config"
 
 	"github.com/koordinator-sh/koordinator/pkg/scheduler/apis/config"
 )
@@ -108,11 +109,11 @@ func ValidateElasticQuotaArgs(elasticArgs *config.ElasticQuotaArgs) error {
 		}
 	}
 
-	if elasticArgs.DelayEvictTime != nil && elasticArgs.DelayEvictTime.Duration < 0 {
+	if elasticArgs.DelayEvictTime.Duration < 0 {
 		return fmt.Errorf("elasticQuotaArgs error, DelayEvictTime should be a positive value")
 	}
 
-	if elasticArgs.RevokePodInterval != nil && elasticArgs.RevokePodInterval.Duration < 0 {
+	if elasticArgs.RevokePodInterval.Duration < 0 {
 		return fmt.Errorf("elasticQuotaArgs error, RevokePodCycle should be a positive value")
 	}
 
@@ -120,11 +121,52 @@ func ValidateElasticQuotaArgs(elasticArgs *config.ElasticQuotaArgs) error {
 }
 
 func ValidateCoschedulingArgs(coeSchedulingArgs *config.CoschedulingArgs) error {
-	if coeSchedulingArgs.DefaultTimeout != nil && coeSchedulingArgs.DefaultTimeout.Duration < 0 {
+	if coeSchedulingArgs.DefaultTimeout.Duration < 0 {
 		return fmt.Errorf("coeSchedulingArgs DefaultTimeoutSeconds invalid")
 	}
-	if coeSchedulingArgs.ControllerWorkers != nil && *coeSchedulingArgs.ControllerWorkers < 1 {
+	if coeSchedulingArgs.ControllerWorkers < 1 {
 		return fmt.Errorf("coeSchedulingArgs ControllerWorkers invalid")
 	}
 	return nil
+}
+
+func validateResources(resources []schedconfig.ResourceSpec, p *field.Path) field.ErrorList {
+	var allErrs field.ErrorList
+	for i, resource := range resources {
+		if resource.Weight <= 0 || resource.Weight > 100 {
+			msg := fmt.Sprintf("resource weight of %v not in valid range (0, 100]", resource.Name)
+			allErrs = append(allErrs, field.Invalid(p.Index(i).Child("weight"), resource.Weight, msg))
+		}
+	}
+	return allErrs
+}
+
+func ValidateDeviceShareArgs(path *field.Path, args *config.DeviceShareArgs) error {
+	var allErrs field.ErrorList
+	if args.ScoringStrategy != nil {
+		allErrs = append(allErrs, validateResources(args.ScoringStrategy.Resources, path.Child("resources"))...)
+	}
+
+	if len(allErrs) == 0 {
+		return nil
+	}
+	return allErrs.ToAggregate()
+}
+
+func ValidateNodeNUMAResourceArgs(path *field.Path, args *config.NodeNUMAResourceArgs) error {
+	var allErrs field.ErrorList
+	if args.DefaultCPUBindPolicy != "" &&
+		args.DefaultCPUBindPolicy != config.CPUBindPolicyFullPCPUs &&
+		args.DefaultCPUBindPolicy != config.CPUBindPolicySpreadByPCPUs {
+		allErrs = append(allErrs, field.Invalid(path.Child("defaultCPUBindPolicy"), args.DefaultCPUBindPolicy, "must specified CPU bind policy FullPCPUs or SpreadByPCPUs"))
+	}
+
+	if args.ScoringStrategy != nil {
+		allErrs = append(allErrs, validateResources(args.ScoringStrategy.Resources, path.Child("resources"))...)
+	}
+
+	if len(allErrs) == 0 {
+		return nil
+	}
+	return allErrs.ToAggregate()
 }

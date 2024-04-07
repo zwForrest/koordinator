@@ -45,7 +45,7 @@ func TestQuotaInfo_GetLimitRequest(t *testing.T) {
 	assertObj.Equal(*resource.NewQuantity(1000, resource.BinarySI), quotaInfo.getLimitRequestNoLock()[corev1.ResourceMemory])
 
 	req2 := createResourceList(100, 1000)
-	quotaInfo.addRequestNonNegativeNoLock(req2)
+	quotaInfo.addRequestNonNegativeNoLock(req2, req2)
 	assertObj.Equal(*resource.NewQuantity(2000, resource.BinarySI), quotaInfo.getLimitRequestNoLock()[corev1.ResourceMemory])
 }
 
@@ -57,8 +57,8 @@ func TestQuotaInfo_AddRequestNonNegativeNoLock(t *testing.T) {
 			Used:    createResourceList(40, 40),
 		},
 	}
-	quotaInfo.addRequestNonNegativeNoLock(req1)
-	quotaInfo.addUsedNonNegativeNoLock(req1)
+	quotaInfo.addRequestNonNegativeNoLock(req1, req1)
+	quotaInfo.addUsedNonNegativeNoLock(req1, createResourceList(0, 0))
 	assert.Equal(t, quotaInfo.CalculateInfo.Request, createResourceList(0, 0))
 	assert.Equal(t, quotaInfo.CalculateInfo.Used, createResourceList(0, 0))
 }
@@ -135,10 +135,10 @@ func TestRuntimeQuotaCalculator_Iteration4AdjustQuota(t *testing.T) {
 	cpu := corev1.ResourceCPU
 	resourceKey[cpu] = struct{}{}
 	qtw.updateResourceKeys(resourceKey)
-	qtw.quotaTree[cpu].insert("node1", 40, 5, 10, true)
-	qtw.quotaTree[cpu].insert("node2", 60, 20, 15, true)
-	qtw.quotaTree[cpu].insert("node3", 50, 40, 20, true)
-	qtw.quotaTree[cpu].insert("node4", 80, 70, 15, true)
+	qtw.quotaTree[cpu].insert("node1", 40, 5, 10, 0, true)
+	qtw.quotaTree[cpu].insert("node2", 60, 20, 15, 0, true)
+	qtw.quotaTree[cpu].insert("node3", 50, 40, 20, 0, true)
+	qtw.quotaTree[cpu].insert("node4", 80, 70, 15, 0, true)
 	qtw.totalResource = corev1.ResourceList{}
 	qtw.totalResource[corev1.ResourceCPU] = *resource.NewMilliQuantity(100, resource.DecimalSI)
 	qtw.calculateRuntimeNoLock()
@@ -217,7 +217,7 @@ func TestRuntimeQuotaCalculator_UpdateOneGroupMaxQuota(t *testing.T) {
 
 	newMax := createResourceList(200, 9000)
 	request := createResourceList(30, 3000)
-	quotaInfo.addRequestNonNegativeNoLock(request)
+	quotaInfo.addRequestNonNegativeNoLock(request, request)
 	assert.Equal(t, request, quotaInfo.CalculateInfo.Request)
 
 	qtw.setClusterTotalResource(max)
@@ -309,7 +309,7 @@ func TestRuntimeQuotaCalculator_UpdateOneGroupRequest(t *testing.T) {
 		request := createResourceList(int64(i*10), int64(i*1000))
 		quotaName := fmt.Sprintf("test-%d", i)
 		quotaInfo := createQuotaInfoWithRes(quotaName, max, min)
-		quotaInfo.addRequestNonNegativeNoLock(request)
+		quotaInfo.addRequestNonNegativeNoLock(request, request)
 
 		qtw.updateOneGroupMaxQuota(quotaInfo)
 		qtw.updateOneGroupMinQuota(quotaInfo)

@@ -67,6 +67,40 @@ spec:
                 description: Third party extensions for NodeSLO
                 type: object
                 x-kubernetes-preserve-unknown-fields: true
+              hostApplications:
+                description: QoS management for out-of-band applications
+                items:
+                  description: HostApplicationSpec describes the QoS management for
+                    out-out-band applications on node
+                  properties:
+                    cgroupPath:
+                      description: Optional, defines the host cgroup configuration,
+                        use default if not specified according to priority and qos
+                      properties:
+                        base:
+                          description: cgroup base dir, the format is various across
+                            cgroup drivers
+                          type: string
+                        parentDir:
+                          description: cgroup parent path under base dir
+                          type: string
+                        relativePath:
+                          description: cgroup relative path under parent dir
+                          type: string
+                      type: object
+                    name:
+                      type: string
+                    priority:
+                      description: Priority class of the application
+                      type: string
+                    qos:
+                      description: QoS class of the application
+                      type: string
+                    strategy:
+                      description: QoS Strategy of host application
+                      type: object
+                  type: object
+                type: array
               resourceQOSStrategy:
                 description: QoS config strategy for pods of different qos-class
                 properties:
@@ -80,12 +114,49 @@ spec:
                               properties:
                                 ioCfg:
                                   properties:
+                                    enableUserModel:
+                                      description: 'configure the cost model of blkio-cost
+                                        manually whether the user model is enabled.
+                                        Default value: false'
+                                      type: boolean
                                     ioWeightPercent:
                                       description: 'This field is used to set the
                                         weight of a sub-group. Default value: 100.
                                         Valid values: 1 to 100.'
                                       format: int64
                                       maximum: 100
+                                      minimum: 1
+                                      type: integer
+                                    modelReadBPS:
+                                      description: the read BPS of user model
+                                      format: int64
+                                      minimum: 1
+                                      type: integer
+                                    modelReadRandIOPS:
+                                      description: the random read iops of user model
+                                      format: int64
+                                      minimum: 1
+                                      type: integer
+                                    modelReadSeqIOPS:
+                                      description: the sequential read iops of user
+                                        model
+                                      format: int64
+                                      minimum: 1
+                                      type: integer
+                                    modelWriteBPS:
+                                      description: the write BPS of user model
+                                      format: int64
+                                      minimum: 1
+                                      type: integer
+                                    modelWriteRandIOPS:
+                                      description: the random write iops of user model
+                                      format: int64
+                                      minimum: 1
+                                      type: integer
+                                    modelWriteSeqIOPS:
+                                      description: the sequential write iops of user
+                                        model
+                                      format: int64
                                       minimum: 1
                                       type: integer
                                     readBPS:
@@ -116,6 +187,12 @@ spec:
                                         Unit: microseconds.'
                                       format: int64
                                       type: integer
+                                    readLatencyPercent:
+                                      description: the read latency percentile
+                                      format: int64
+                                      maximum: 100
+                                      minimum: 0
+                                      type: integer
                                     writeBPS:
                                       format: int64
                                       minimum: 0
@@ -128,6 +205,12 @@ spec:
                                       description: 'the write latency threshold. Unit:
                                         microseconds.'
                                       format: int64
+                                      type: integer
+                                    writeLatencyPercent:
+                                      description: the write latency percentile
+                                      format: int64
+                                      maximum: 100
+                                      minimum: 0
                                       type: integer
                                   type: object
                                 name:
@@ -142,12 +225,26 @@ spec:
                       cpuQOS:
                         description: CPUQOSCfg stores node-level config of cpu qos
                         properties:
+                          coreExpeller:
+                            description: 'whether pods of the QoS class can expel
+                              the cgroup idle pods at the SMT-level. default = false
+                              If set to true, pods of this QoS will use a dedicated
+                              core sched group for noise clean with the SchedIdle
+                              pods. NOTE: It takes effect if cpuPolicy = "coreSched".'
+                            type: boolean
                           enable:
                             description: Enable indicates whether the cpu qos is enabled.
                             type: boolean
                           groupIdentity:
-                            description: group identity value for pods, default =
-                              0
+                            description: 'group identity value for pods, default =
+                              0 NOTE: It takes effect if cpuPolicy = "groupIdentity".'
+                            format: int64
+                            type: integer
+                          schedIdle:
+                            description: 'cpu.idle value for pods, default = 0. `1`
+                              means using SCHED_IDLE. CGroup Idle (introduced since
+                              mainline Linux 5.15): https://lore.kernel.org/lkml/162971078674.25758.15464079371945307825.tip-bot2@tip-bot2/#r
+                              NOTE: It takes effect if cpuPolicy = "coreSched".'
                             format: int64
                             type: integer
                         type: object
@@ -252,6 +349,59 @@ spec:
                             maximum: 1000
                             minimum: 1
                             type: integer
+                        type: object
+                      networkQOS:
+                        properties:
+                          egressLimit:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            default: 100
+                            description: 'EgressLimit describes the maximum network
+                              bandwidth can be used in the egress direction, unit:
+                              bps(bytes per second), two expressions are supported，int
+                              and string, int: percentage based on total bandwidth，valid
+                              in 0-100 string: a specific network bandwidth value,
+                              eg: 50M.'
+                            x-kubernetes-int-or-string: true
+                          egressRequest:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            default: 0
+                            description: 'EgressRequest describes the minimum network
+                              bandwidth guaranteed in the egress direction. unit:
+                              bps(bytes per second), two expressions are supported，int
+                              and string, int: percentage based on total bandwidth，valid
+                              in 0-100 string: a specific network bandwidth value,
+                              eg: 50M.'
+                            x-kubernetes-int-or-string: true
+                          enable:
+                            type: boolean
+                          ingressLimit:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            default: 100
+                            description: 'IngressLimit describes the maximum network
+                              bandwidth can be used in the ingress direction, unit:
+                              bps(bytes per second), two expressions are supported，int
+                              and string, int: percentage based on total bandwidth，valid
+                              in 0-100 string: a specific network bandwidth value,
+                              eg: 50M.'
+                            x-kubernetes-int-or-string: true
+                          ingressRequest:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            default: 0
+                            description: 'IngressRequest describes the minimum network
+                              bandwidth guaranteed in the ingress direction. unit:
+                              bps(bytes per second), two expressions are supported，int
+                              and string, int: percentage based on total bandwidth，valid
+                              in 0-100 string: a specific network bandwidth value,
+                              eg: 50M.'
+                            x-kubernetes-int-or-string: true
                         type: object
                       resctrlQOS:
                         description: ResctrlQOSCfg stores node-level config of resctrl
@@ -291,12 +441,49 @@ spec:
                               properties:
                                 ioCfg:
                                   properties:
+                                    enableUserModel:
+                                      description: 'configure the cost model of blkio-cost
+                                        manually whether the user model is enabled.
+                                        Default value: false'
+                                      type: boolean
                                     ioWeightPercent:
                                       description: 'This field is used to set the
                                         weight of a sub-group. Default value: 100.
                                         Valid values: 1 to 100.'
                                       format: int64
                                       maximum: 100
+                                      minimum: 1
+                                      type: integer
+                                    modelReadBPS:
+                                      description: the read BPS of user model
+                                      format: int64
+                                      minimum: 1
+                                      type: integer
+                                    modelReadRandIOPS:
+                                      description: the random read iops of user model
+                                      format: int64
+                                      minimum: 1
+                                      type: integer
+                                    modelReadSeqIOPS:
+                                      description: the sequential read iops of user
+                                        model
+                                      format: int64
+                                      minimum: 1
+                                      type: integer
+                                    modelWriteBPS:
+                                      description: the write BPS of user model
+                                      format: int64
+                                      minimum: 1
+                                      type: integer
+                                    modelWriteRandIOPS:
+                                      description: the random write iops of user model
+                                      format: int64
+                                      minimum: 1
+                                      type: integer
+                                    modelWriteSeqIOPS:
+                                      description: the sequential write iops of user
+                                        model
+                                      format: int64
                                       minimum: 1
                                       type: integer
                                     readBPS:
@@ -327,6 +514,12 @@ spec:
                                         Unit: microseconds.'
                                       format: int64
                                       type: integer
+                                    readLatencyPercent:
+                                      description: the read latency percentile
+                                      format: int64
+                                      maximum: 100
+                                      minimum: 0
+                                      type: integer
                                     writeBPS:
                                       format: int64
                                       minimum: 0
@@ -339,6 +532,12 @@ spec:
                                       description: 'the write latency threshold. Unit:
                                         microseconds.'
                                       format: int64
+                                      type: integer
+                                    writeLatencyPercent:
+                                      description: the write latency percentile
+                                      format: int64
+                                      maximum: 100
+                                      minimum: 0
                                       type: integer
                                   type: object
                                 name:
@@ -353,12 +552,26 @@ spec:
                       cpuQOS:
                         description: CPUQOSCfg stores node-level config of cpu qos
                         properties:
+                          coreExpeller:
+                            description: 'whether pods of the QoS class can expel
+                              the cgroup idle pods at the SMT-level. default = false
+                              If set to true, pods of this QoS will use a dedicated
+                              core sched group for noise clean with the SchedIdle
+                              pods. NOTE: It takes effect if cpuPolicy = "coreSched".'
+                            type: boolean
                           enable:
                             description: Enable indicates whether the cpu qos is enabled.
                             type: boolean
                           groupIdentity:
-                            description: group identity value for pods, default =
-                              0
+                            description: 'group identity value for pods, default =
+                              0 NOTE: It takes effect if cpuPolicy = "groupIdentity".'
+                            format: int64
+                            type: integer
+                          schedIdle:
+                            description: 'cpu.idle value for pods, default = 0. `1`
+                              means using SCHED_IDLE. CGroup Idle (introduced since
+                              mainline Linux 5.15): https://lore.kernel.org/lkml/162971078674.25758.15464079371945307825.tip-bot2@tip-bot2/#r
+                              NOTE: It takes effect if cpuPolicy = "coreSched".'
                             format: int64
                             type: integer
                         type: object
@@ -463,6 +676,59 @@ spec:
                             maximum: 1000
                             minimum: 1
                             type: integer
+                        type: object
+                      networkQOS:
+                        properties:
+                          egressLimit:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            default: 100
+                            description: 'EgressLimit describes the maximum network
+                              bandwidth can be used in the egress direction, unit:
+                              bps(bytes per second), two expressions are supported，int
+                              and string, int: percentage based on total bandwidth，valid
+                              in 0-100 string: a specific network bandwidth value,
+                              eg: 50M.'
+                            x-kubernetes-int-or-string: true
+                          egressRequest:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            default: 0
+                            description: 'EgressRequest describes the minimum network
+                              bandwidth guaranteed in the egress direction. unit:
+                              bps(bytes per second), two expressions are supported，int
+                              and string, int: percentage based on total bandwidth，valid
+                              in 0-100 string: a specific network bandwidth value,
+                              eg: 50M.'
+                            x-kubernetes-int-or-string: true
+                          enable:
+                            type: boolean
+                          ingressLimit:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            default: 100
+                            description: 'IngressLimit describes the maximum network
+                              bandwidth can be used in the ingress direction, unit:
+                              bps(bytes per second), two expressions are supported，int
+                              and string, int: percentage based on total bandwidth，valid
+                              in 0-100 string: a specific network bandwidth value,
+                              eg: 50M.'
+                            x-kubernetes-int-or-string: true
+                          ingressRequest:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            default: 0
+                            description: 'IngressRequest describes the minimum network
+                              bandwidth guaranteed in the ingress direction. unit:
+                              bps(bytes per second), two expressions are supported，int
+                              and string, int: percentage based on total bandwidth，valid
+                              in 0-100 string: a specific network bandwidth value,
+                              eg: 50M.'
+                            x-kubernetes-int-or-string: true
                         type: object
                       resctrlQOS:
                         description: ResctrlQOSCfg stores node-level config of resctrl
@@ -502,12 +768,49 @@ spec:
                               properties:
                                 ioCfg:
                                   properties:
+                                    enableUserModel:
+                                      description: 'configure the cost model of blkio-cost
+                                        manually whether the user model is enabled.
+                                        Default value: false'
+                                      type: boolean
                                     ioWeightPercent:
                                       description: 'This field is used to set the
                                         weight of a sub-group. Default value: 100.
                                         Valid values: 1 to 100.'
                                       format: int64
                                       maximum: 100
+                                      minimum: 1
+                                      type: integer
+                                    modelReadBPS:
+                                      description: the read BPS of user model
+                                      format: int64
+                                      minimum: 1
+                                      type: integer
+                                    modelReadRandIOPS:
+                                      description: the random read iops of user model
+                                      format: int64
+                                      minimum: 1
+                                      type: integer
+                                    modelReadSeqIOPS:
+                                      description: the sequential read iops of user
+                                        model
+                                      format: int64
+                                      minimum: 1
+                                      type: integer
+                                    modelWriteBPS:
+                                      description: the write BPS of user model
+                                      format: int64
+                                      minimum: 1
+                                      type: integer
+                                    modelWriteRandIOPS:
+                                      description: the random write iops of user model
+                                      format: int64
+                                      minimum: 1
+                                      type: integer
+                                    modelWriteSeqIOPS:
+                                      description: the sequential write iops of user
+                                        model
+                                      format: int64
                                       minimum: 1
                                       type: integer
                                     readBPS:
@@ -538,6 +841,12 @@ spec:
                                         Unit: microseconds.'
                                       format: int64
                                       type: integer
+                                    readLatencyPercent:
+                                      description: the read latency percentile
+                                      format: int64
+                                      maximum: 100
+                                      minimum: 0
+                                      type: integer
                                     writeBPS:
                                       format: int64
                                       minimum: 0
@@ -550,6 +859,12 @@ spec:
                                       description: 'the write latency threshold. Unit:
                                         microseconds.'
                                       format: int64
+                                      type: integer
+                                    writeLatencyPercent:
+                                      description: the write latency percentile
+                                      format: int64
+                                      maximum: 100
+                                      minimum: 0
                                       type: integer
                                   type: object
                                 name:
@@ -564,12 +879,26 @@ spec:
                       cpuQOS:
                         description: CPUQOSCfg stores node-level config of cpu qos
                         properties:
+                          coreExpeller:
+                            description: 'whether pods of the QoS class can expel
+                              the cgroup idle pods at the SMT-level. default = false
+                              If set to true, pods of this QoS will use a dedicated
+                              core sched group for noise clean with the SchedIdle
+                              pods. NOTE: It takes effect if cpuPolicy = "coreSched".'
+                            type: boolean
                           enable:
                             description: Enable indicates whether the cpu qos is enabled.
                             type: boolean
                           groupIdentity:
-                            description: group identity value for pods, default =
-                              0
+                            description: 'group identity value for pods, default =
+                              0 NOTE: It takes effect if cpuPolicy = "groupIdentity".'
+                            format: int64
+                            type: integer
+                          schedIdle:
+                            description: 'cpu.idle value for pods, default = 0. `1`
+                              means using SCHED_IDLE. CGroup Idle (introduced since
+                              mainline Linux 5.15): https://lore.kernel.org/lkml/162971078674.25758.15464079371945307825.tip-bot2@tip-bot2/#r
+                              NOTE: It takes effect if cpuPolicy = "coreSched".'
                             format: int64
                             type: integer
                         type: object
@@ -674,6 +1003,59 @@ spec:
                             maximum: 1000
                             minimum: 1
                             type: integer
+                        type: object
+                      networkQOS:
+                        properties:
+                          egressLimit:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            default: 100
+                            description: 'EgressLimit describes the maximum network
+                              bandwidth can be used in the egress direction, unit:
+                              bps(bytes per second), two expressions are supported，int
+                              and string, int: percentage based on total bandwidth，valid
+                              in 0-100 string: a specific network bandwidth value,
+                              eg: 50M.'
+                            x-kubernetes-int-or-string: true
+                          egressRequest:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            default: 0
+                            description: 'EgressRequest describes the minimum network
+                              bandwidth guaranteed in the egress direction. unit:
+                              bps(bytes per second), two expressions are supported，int
+                              and string, int: percentage based on total bandwidth，valid
+                              in 0-100 string: a specific network bandwidth value,
+                              eg: 50M.'
+                            x-kubernetes-int-or-string: true
+                          enable:
+                            type: boolean
+                          ingressLimit:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            default: 100
+                            description: 'IngressLimit describes the maximum network
+                              bandwidth can be used in the ingress direction, unit:
+                              bps(bytes per second), two expressions are supported，int
+                              and string, int: percentage based on total bandwidth，valid
+                              in 0-100 string: a specific network bandwidth value,
+                              eg: 50M.'
+                            x-kubernetes-int-or-string: true
+                          ingressRequest:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            default: 0
+                            description: 'IngressRequest describes the minimum network
+                              bandwidth guaranteed in the ingress direction. unit:
+                              bps(bytes per second), two expressions are supported，int
+                              and string, int: percentage based on total bandwidth，valid
+                              in 0-100 string: a specific network bandwidth value,
+                              eg: 50M.'
+                            x-kubernetes-int-or-string: true
                         type: object
                       resctrlQOS:
                         description: ResctrlQOSCfg stores node-level config of resctrl
@@ -713,12 +1095,49 @@ spec:
                               properties:
                                 ioCfg:
                                   properties:
+                                    enableUserModel:
+                                      description: 'configure the cost model of blkio-cost
+                                        manually whether the user model is enabled.
+                                        Default value: false'
+                                      type: boolean
                                     ioWeightPercent:
                                       description: 'This field is used to set the
                                         weight of a sub-group. Default value: 100.
                                         Valid values: 1 to 100.'
                                       format: int64
                                       maximum: 100
+                                      minimum: 1
+                                      type: integer
+                                    modelReadBPS:
+                                      description: the read BPS of user model
+                                      format: int64
+                                      minimum: 1
+                                      type: integer
+                                    modelReadRandIOPS:
+                                      description: the random read iops of user model
+                                      format: int64
+                                      minimum: 1
+                                      type: integer
+                                    modelReadSeqIOPS:
+                                      description: the sequential read iops of user
+                                        model
+                                      format: int64
+                                      minimum: 1
+                                      type: integer
+                                    modelWriteBPS:
+                                      description: the write BPS of user model
+                                      format: int64
+                                      minimum: 1
+                                      type: integer
+                                    modelWriteRandIOPS:
+                                      description: the random write iops of user model
+                                      format: int64
+                                      minimum: 1
+                                      type: integer
+                                    modelWriteSeqIOPS:
+                                      description: the sequential write iops of user
+                                        model
+                                      format: int64
                                       minimum: 1
                                       type: integer
                                     readBPS:
@@ -749,6 +1168,12 @@ spec:
                                         Unit: microseconds.'
                                       format: int64
                                       type: integer
+                                    readLatencyPercent:
+                                      description: the read latency percentile
+                                      format: int64
+                                      maximum: 100
+                                      minimum: 0
+                                      type: integer
                                     writeBPS:
                                       format: int64
                                       minimum: 0
@@ -761,6 +1186,12 @@ spec:
                                       description: 'the write latency threshold. Unit:
                                         microseconds.'
                                       format: int64
+                                      type: integer
+                                    writeLatencyPercent:
+                                      description: the write latency percentile
+                                      format: int64
+                                      maximum: 100
+                                      minimum: 0
                                       type: integer
                                   type: object
                                 name:
@@ -775,12 +1206,26 @@ spec:
                       cpuQOS:
                         description: CPUQOSCfg stores node-level config of cpu qos
                         properties:
+                          coreExpeller:
+                            description: 'whether pods of the QoS class can expel
+                              the cgroup idle pods at the SMT-level. default = false
+                              If set to true, pods of this QoS will use a dedicated
+                              core sched group for noise clean with the SchedIdle
+                              pods. NOTE: It takes effect if cpuPolicy = "coreSched".'
+                            type: boolean
                           enable:
                             description: Enable indicates whether the cpu qos is enabled.
                             type: boolean
                           groupIdentity:
-                            description: group identity value for pods, default =
-                              0
+                            description: 'group identity value for pods, default =
+                              0 NOTE: It takes effect if cpuPolicy = "groupIdentity".'
+                            format: int64
+                            type: integer
+                          schedIdle:
+                            description: 'cpu.idle value for pods, default = 0. `1`
+                              means using SCHED_IDLE. CGroup Idle (introduced since
+                              mainline Linux 5.15): https://lore.kernel.org/lkml/162971078674.25758.15464079371945307825.tip-bot2@tip-bot2/#r
+                              NOTE: It takes effect if cpuPolicy = "coreSched".'
                             format: int64
                             type: integer
                         type: object
@@ -885,6 +1330,59 @@ spec:
                             maximum: 1000
                             minimum: 1
                             type: integer
+                        type: object
+                      networkQOS:
+                        properties:
+                          egressLimit:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            default: 100
+                            description: 'EgressLimit describes the maximum network
+                              bandwidth can be used in the egress direction, unit:
+                              bps(bytes per second), two expressions are supported，int
+                              and string, int: percentage based on total bandwidth，valid
+                              in 0-100 string: a specific network bandwidth value,
+                              eg: 50M.'
+                            x-kubernetes-int-or-string: true
+                          egressRequest:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            default: 0
+                            description: 'EgressRequest describes the minimum network
+                              bandwidth guaranteed in the egress direction. unit:
+                              bps(bytes per second), two expressions are supported，int
+                              and string, int: percentage based on total bandwidth，valid
+                              in 0-100 string: a specific network bandwidth value,
+                              eg: 50M.'
+                            x-kubernetes-int-or-string: true
+                          enable:
+                            type: boolean
+                          ingressLimit:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            default: 100
+                            description: 'IngressLimit describes the maximum network
+                              bandwidth can be used in the ingress direction, unit:
+                              bps(bytes per second), two expressions are supported，int
+                              and string, int: percentage based on total bandwidth，valid
+                              in 0-100 string: a specific network bandwidth value,
+                              eg: 50M.'
+                            x-kubernetes-int-or-string: true
+                          ingressRequest:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            default: 0
+                            description: 'IngressRequest describes the minimum network
+                              bandwidth guaranteed in the ingress direction. unit:
+                              bps(bytes per second), two expressions are supported，int
+                              and string, int: percentage based on total bandwidth，valid
+                              in 0-100 string: a specific network bandwidth value,
+                              eg: 50M.'
+                            x-kubernetes-int-or-string: true
                         type: object
                       resctrlQOS:
                         description: ResctrlQOSCfg stores node-level config of resctrl
@@ -914,6 +1412,16 @@ spec:
                             type: integer
                         type: object
                     type: object
+                  policies:
+                    description: Policies of pod QoS.
+                    properties:
+                      cpuPolicy:
+                        description: applied policy for the CPU QoS, default = "groupIdentity"
+                        type: string
+                      netQOSPolicy:
+                        description: applied policy for the Net QoS, default = "tc"
+                        type: string
+                    type: object
                   systemClass:
                     description: ResourceQOS for system pods
                     properties:
@@ -924,12 +1432,49 @@ spec:
                               properties:
                                 ioCfg:
                                   properties:
+                                    enableUserModel:
+                                      description: 'configure the cost model of blkio-cost
+                                        manually whether the user model is enabled.
+                                        Default value: false'
+                                      type: boolean
                                     ioWeightPercent:
                                       description: 'This field is used to set the
                                         weight of a sub-group. Default value: 100.
                                         Valid values: 1 to 100.'
                                       format: int64
                                       maximum: 100
+                                      minimum: 1
+                                      type: integer
+                                    modelReadBPS:
+                                      description: the read BPS of user model
+                                      format: int64
+                                      minimum: 1
+                                      type: integer
+                                    modelReadRandIOPS:
+                                      description: the random read iops of user model
+                                      format: int64
+                                      minimum: 1
+                                      type: integer
+                                    modelReadSeqIOPS:
+                                      description: the sequential read iops of user
+                                        model
+                                      format: int64
+                                      minimum: 1
+                                      type: integer
+                                    modelWriteBPS:
+                                      description: the write BPS of user model
+                                      format: int64
+                                      minimum: 1
+                                      type: integer
+                                    modelWriteRandIOPS:
+                                      description: the random write iops of user model
+                                      format: int64
+                                      minimum: 1
+                                      type: integer
+                                    modelWriteSeqIOPS:
+                                      description: the sequential write iops of user
+                                        model
+                                      format: int64
                                       minimum: 1
                                       type: integer
                                     readBPS:
@@ -960,6 +1505,12 @@ spec:
                                         Unit: microseconds.'
                                       format: int64
                                       type: integer
+                                    readLatencyPercent:
+                                      description: the read latency percentile
+                                      format: int64
+                                      maximum: 100
+                                      minimum: 0
+                                      type: integer
                                     writeBPS:
                                       format: int64
                                       minimum: 0
@@ -972,6 +1523,12 @@ spec:
                                       description: 'the write latency threshold. Unit:
                                         microseconds.'
                                       format: int64
+                                      type: integer
+                                    writeLatencyPercent:
+                                      description: the write latency percentile
+                                      format: int64
+                                      maximum: 100
+                                      minimum: 0
                                       type: integer
                                   type: object
                                 name:
@@ -986,12 +1543,26 @@ spec:
                       cpuQOS:
                         description: CPUQOSCfg stores node-level config of cpu qos
                         properties:
+                          coreExpeller:
+                            description: 'whether pods of the QoS class can expel
+                              the cgroup idle pods at the SMT-level. default = false
+                              If set to true, pods of this QoS will use a dedicated
+                              core sched group for noise clean with the SchedIdle
+                              pods. NOTE: It takes effect if cpuPolicy = "coreSched".'
+                            type: boolean
                           enable:
                             description: Enable indicates whether the cpu qos is enabled.
                             type: boolean
                           groupIdentity:
-                            description: group identity value for pods, default =
-                              0
+                            description: 'group identity value for pods, default =
+                              0 NOTE: It takes effect if cpuPolicy = "groupIdentity".'
+                            format: int64
+                            type: integer
+                          schedIdle:
+                            description: 'cpu.idle value for pods, default = 0. `1`
+                              means using SCHED_IDLE. CGroup Idle (introduced since
+                              mainline Linux 5.15): https://lore.kernel.org/lkml/162971078674.25758.15464079371945307825.tip-bot2@tip-bot2/#r
+                              NOTE: It takes effect if cpuPolicy = "coreSched".'
                             format: int64
                             type: integer
                         type: object
@@ -1096,6 +1667,59 @@ spec:
                             maximum: 1000
                             minimum: 1
                             type: integer
+                        type: object
+                      networkQOS:
+                        properties:
+                          egressLimit:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            default: 100
+                            description: 'EgressLimit describes the maximum network
+                              bandwidth can be used in the egress direction, unit:
+                              bps(bytes per second), two expressions are supported，int
+                              and string, int: percentage based on total bandwidth，valid
+                              in 0-100 string: a specific network bandwidth value,
+                              eg: 50M.'
+                            x-kubernetes-int-or-string: true
+                          egressRequest:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            default: 0
+                            description: 'EgressRequest describes the minimum network
+                              bandwidth guaranteed in the egress direction. unit:
+                              bps(bytes per second), two expressions are supported，int
+                              and string, int: percentage based on total bandwidth，valid
+                              in 0-100 string: a specific network bandwidth value,
+                              eg: 50M.'
+                            x-kubernetes-int-or-string: true
+                          enable:
+                            type: boolean
+                          ingressLimit:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            default: 100
+                            description: 'IngressLimit describes the maximum network
+                              bandwidth can be used in the ingress direction, unit:
+                              bps(bytes per second), two expressions are supported，int
+                              and string, int: percentage based on total bandwidth，valid
+                              in 0-100 string: a specific network bandwidth value,
+                              eg: 50M.'
+                            x-kubernetes-int-or-string: true
+                          ingressRequest:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            default: 0
+                            description: 'IngressRequest describes the minimum network
+                              bandwidth guaranteed in the ingress direction. unit:
+                              bps(bytes per second), two expressions are supported，int
+                              and string, int: percentage based on total bandwidth，valid
+                              in 0-100 string: a specific network bandwidth value,
+                              eg: 50M.'
+                            x-kubernetes-int-or-string: true
                         type: object
                       resctrlQOS:
                         description: ResctrlQOSCfg stores node-level config of resctrl
@@ -1147,6 +1771,10 @@ spec:
                       then start to calculate the resources need to be released.
                     format: int64
                     type: integer
+                  cpuEvictPolicy:
+                    description: 'CPUEvictPolicy defines the policy for the BECPUEvict
+                      feature. Default: `evictByRealLimit`.'
+                    type: string
                   cpuEvictTimeWindowSeconds:
                     description: when avg(cpuusage) > CPUEvictThresholdPercent, will
                       start to evict pod by cpu, and avg(cpuusage) is calculated based
@@ -1193,6 +1821,15 @@ spec:
                       = minFreeKbytesFactor * nodeTotalMemory /10000
                     format: int64
                     type: integer
+                  totalNetworkBandwidth:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    description: 'TotalNetworkBandwidth indicates the overall network
+                      bandwidth, cluster manager can set this field, and default value
+                      taken from /sys/class/net/${NIC_NAME}/speed, unit: Mbps'
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
                   watermarkScaleFactor:
                     description: /proc/sys/vm/watermark_scale_factor
                     format: int64

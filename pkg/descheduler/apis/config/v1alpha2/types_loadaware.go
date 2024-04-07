@@ -39,6 +39,11 @@ type LowNodeLoadArgs struct {
 	// By default, NumberOfNodes is set to zero.
 	NumberOfNodes *int32 `json:"numberOfNodes,omitempty"`
 
+	// NodeMetricExpirationSeconds indicates the NodeMetric expiration in seconds.
+	// When NodeMetrics expired, the node is considered abnormal, and should not be considered by deschedule plugin.
+	// Default is 180 seconds.
+	NodeMetricExpirationSeconds *int64 `json:"nodeMetricExpirationSeconds,omitempty"`
+
 	// Naming this one differently since namespaces are still
 	// considered while considering resoures used by pods
 	// but then filtered out before eviction
@@ -67,6 +72,38 @@ type LowNodeLoadArgs struct {
 
 	// ResourceWeights indicates the weights of resources.
 	// The weights of CPU and Memory are both 1 by default.
+	ResourceWeights map[corev1.ResourceName]int64 `json:"resourceWeights,omitempty"`
+
+	// AnomalyCondition indicates the node load anomaly thresholds,
+	// the default is 5 consecutive times exceeding HighThresholds,
+	// it is determined that the node is abnormal, and the Pods need to be migrated to reduce the load.
+	AnomalyCondition *LoadAnomalyCondition `json:"anomalyCondition,omitempty"`
+
+	// DetectorCacheTimeout indicates the cache expiration time of nodeAnomalyDetectors, the default is 5 minute
+	DetectorCacheTimeout *metav1.Duration `json:"detectorCacheTimeout,omitempty"`
+
+	// NodePools supports multiple different types of batch nodes to configure different strategies
+	NodePools []LowNodeLoadNodePool `json:"nodePools,omitempty"`
+}
+
+type LowNodeLoadNodePool struct {
+	// Name represents the name of pool
+	Name string `json:"name,omitempty"`
+	// NodeSelector selects the nodes that matched labelSelector
+	NodeSelector *metav1.LabelSelector `json:"nodeSelector,omitempty"`
+	// If UseDeviationThresholds is set to `true`, the thresholds are considered as percentage deviations from mean resource usage.
+	// `LowThresholds` will be deducted from the mean among all nodes and `HighThresholds` will be added to the mean.
+	// A resource consumption above (resp. below) this window is considered as overutilization (resp. underutilization).
+	UseDeviationThresholds bool `json:"useDeviationThresholds,omitempty"`
+
+	// HighThresholds defines the target usage threshold of resources
+	HighThresholds ResourceThresholds `json:"highThresholds,omitempty"`
+
+	// LowThresholds defines the low usage threshold of resources
+	LowThresholds ResourceThresholds `json:"lowThresholds,omitempty"`
+
+	// ResourceWeights indicates the weights of resources.
+	// The weights of resources are both 1 by default.
 	ResourceWeights map[corev1.ResourceName]int64 `json:"resourceWeights,omitempty"`
 
 	// AnomalyCondition indicates the node load anomaly thresholds,

@@ -21,6 +21,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/utils/pointer"
 
 	ext "github.com/koordinator-sh/koordinator/apis/extension"
@@ -185,10 +187,9 @@ func Test_cpusetPlugin_SetContainerCPUSet(t *testing.T) {
 			},
 			args: args{
 				podAlloc: &ext.ResourceStatus{
-					CPUSharedPools: []ext.CPUSharedPool{
+					NUMANodeResources: []ext.NUMANodeResource{
 						{
-							Socket: 0,
-							Node:   0,
+							Node: 0,
 						},
 					},
 				},
@@ -213,7 +214,7 @@ func Test_cpusetPlugin_SetContainerCPUSet(t *testing.T) {
 						},
 						{
 							Socket: 1,
-							Node:   0,
+							Node:   1,
 							CPUSet: "8-15",
 						},
 					},
@@ -245,7 +246,7 @@ func Test_cpusetPlugin_SetContainerCPUSet(t *testing.T) {
 						},
 						{
 							Socket: 1,
-							Node:   0,
+							Node:   1,
 							CPUSet: "8-15",
 						},
 					},
@@ -277,7 +278,7 @@ func Test_cpusetPlugin_SetContainerCPUSet(t *testing.T) {
 						},
 						{
 							Socket: 1,
-							Node:   0,
+							Node:   1,
 							CPUSet: "8-15",
 						},
 					},
@@ -285,10 +286,12 @@ func Test_cpusetPlugin_SetContainerCPUSet(t *testing.T) {
 			},
 			args: args{
 				podAlloc: &ext.ResourceStatus{
-					CPUSharedPools: []ext.CPUSharedPool{
+					NUMANodeResources: []ext.NUMANodeResource{
 						{
-							Socket: 0,
-							Node:   0,
+							Node: 0,
+							Resources: map[corev1.ResourceName]resource.Quantity{
+								corev1.ResourceCPU: *resource.NewQuantity(2, resource.DecimalSI),
+							},
 						},
 					},
 				},
@@ -313,7 +316,7 @@ func Test_cpusetPlugin_SetContainerCPUSet(t *testing.T) {
 						},
 						{
 							Socket: 1,
-							Node:   0,
+							Node:   1,
 							CPUSet: "8-15",
 						},
 					},
@@ -436,10 +439,9 @@ func TestUnsetPodCPUQuota(t *testing.T) {
 			name: "not change cfs quota by pod allocated share pool",
 			args: args{
 				podAlloc: &ext.ResourceStatus{
-					CPUSharedPools: []ext.CPUSharedPool{
+					NUMANodeResources: []ext.NUMANodeResource{
 						{
-							Socket: 0,
-							Node:   0,
+							Node: 0,
 						},
 					},
 				},
@@ -492,7 +494,7 @@ func TestUnsetPodCPUQuota(t *testing.T) {
 			if podCtx == nil {
 				return
 			}
-			e := resourceexecutor.NewResourceUpdateExecutor()
+			e := resourceexecutor.NewTestResourceExecutor()
 			stop := make(chan struct{})
 			defer func() {
 				close(stop)
@@ -566,10 +568,9 @@ func TestUnsetContainerCPUQuota(t *testing.T) {
 			name: "not change cfs quota by pod allocated share pool",
 			args: args{
 				podAlloc: &ext.ResourceStatus{
-					CPUSharedPools: []ext.CPUSharedPool{
+					NUMANodeResources: []ext.NUMANodeResource{
 						{
-							Socket: 0,
-							Node:   0,
+							Node: 0,
 						},
 					},
 				},
@@ -633,6 +634,123 @@ func TestUnsetContainerCPUQuota(t *testing.T) {
 				gotCPUQuotaStr, err := strconv.ParseInt(gotCPUQuota, 10, 64)
 				assert.NoError(t, err)
 				assert.Equal(t, *tt.wantCPUQuota, gotCPUQuotaStr, "container cfs quota should be equal")
+			}
+		})
+	}
+}
+
+func Test_cpusetPlugin_SetHostAppCPUSet(t *testing.T) {
+	type fields struct {
+		rule *cpusetRule
+	}
+	type args struct {
+		proto protocol.HooksProtocol
+	}
+	tests := []struct {
+		name       string
+		fields     fields
+		args       args
+		wantCPUSet *string
+		wantErr    bool
+	}{
+		{
+			name: "set cpuset with bad protocol",
+			fields: fields{
+				rule: nil,
+			},
+			args: args{
+				proto: nil,
+			},
+			wantCPUSet: nil,
+			wantErr:    true,
+		},
+		{
+			name: "set cpuset with nil rule",
+			fields: fields{
+				rule: nil,
+			},
+			args: args{
+				proto: &protocol.HostAppContext{
+					Request: protocol.HostAppRequest{
+						Name:         "test-app",
+						QOSClass:     ext.QoSLS,
+						CgroupParent: "host-latency-sensitive/nginx/",
+					},
+				},
+			},
+			wantCPUSet: nil,
+			wantErr:    false,
+		},
+		{
+			name: "set cpuset with with lsr application",
+			fields: fields{
+				rule: &cpusetRule{
+					sharePools: []ext.CPUSharedPool{
+						{
+							Socket: 0,
+							Node:   0,
+							CPUSet: "0-7",
+						},
+						{
+							Socket: 1,
+							Node:   0,
+							CPUSet: "8-15",
+						},
+					},
+					systemQOSCPUSet: "0-3",
+				},
+			},
+			args: args{
+				proto: &protocol.HostAppContext{
+					Request: protocol.HostAppRequest{
+						Name:         "test-app",
+						QOSClass:     ext.QoSLSR,
+						CgroupParent: "host-latency-sensitive/nginx/",
+					},
+				},
+			},
+			wantCPUSet: nil,
+			wantErr:    true,
+		},
+		{
+			name: "set cpuset with with ls application",
+			fields: fields{
+				rule: &cpusetRule{
+					sharePools: []ext.CPUSharedPool{
+						{
+							Socket: 0,
+							Node:   0,
+							CPUSet: "0-7",
+						},
+						{
+							Socket: 1,
+							Node:   0,
+							CPUSet: "8-15",
+						},
+					},
+					systemQOSCPUSet: "0-3",
+				},
+			},
+			args: args{
+				proto: &protocol.HostAppContext{
+					Request: protocol.HostAppRequest{
+						Name:         "test-app",
+						QOSClass:     ext.QoSLS,
+						CgroupParent: "host-latency-sensitive/nginx/",
+					},
+				},
+			},
+			wantCPUSet: pointer.String("0-7,8-15"),
+			wantErr:    false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &cpusetPlugin{
+				rule: tt.fields.rule,
+			}
+			if err := p.SetHostAppCPUSet(tt.args.proto); (err != nil) != tt.wantErr {
+				t.Errorf("SetHostAppCPUSet() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}

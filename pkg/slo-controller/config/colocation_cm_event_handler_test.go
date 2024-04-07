@@ -27,7 +27,8 @@ import (
 	"k8s.io/utils/pointer"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	"github.com/koordinator-sh/koordinator/apis/extension"
+	"github.com/koordinator-sh/koordinator/apis/configuration"
+	slov1alpha1 "github.com/koordinator-sh/koordinator/apis/slo/v1alpha1"
 	"github.com/koordinator-sh/koordinator/pkg/util/sloconfig"
 )
 
@@ -35,8 +36,11 @@ func Test_syncColocationConfigIfChanged(t *testing.T) {
 	sloconfig.ClearDefaultColocationExtension()
 	oldCfg := *sloconfig.NewDefaultColocationCfg()
 	oldCfg.MemoryReclaimThresholdPercent = pointer.Int64(40)
-	memoryCalcPolicyByUsage := extension.CalculateByPodUsage
-	memoryCalcPolicyByRequest := extension.CalculateByPodRequest
+	memoryCalcPolicyByUsage := configuration.CalculateByPodUsage
+	memoryCalcPolicyByRequest := configuration.CalculateByPodRequest
+	cpuCalcPolicyByUsage := configuration.CalculateByPodUsage
+	cpuCalcPolicyNew := configuration.CalculatePolicy("")
+	var defaultNodeMemoryCollectPolicy = slov1alpha1.UsageWithoutPageCache
 
 	type fields struct {
 		config *colocationCfgCache
@@ -136,7 +140,7 @@ func Test_syncColocationConfigIfChanged(t *testing.T) {
 					Namespace: sloconfig.ConfigNameSpace,
 				},
 				Data: map[string]string{
-					extension.ColocationConfigKey: "{\"metricAggregateDurationSeconds\":10, \"invalidKey\":\"invalidValue\",}",
+					configuration.ColocationConfigKey: "{\"metricAggregateDurationSeconds\":10, \"invalidKey\":\"invalidValue\",}",
 				},
 			}},
 			wantChanged: false,
@@ -158,7 +162,7 @@ func Test_syncColocationConfigIfChanged(t *testing.T) {
 					Namespace: sloconfig.ConfigNameSpace,
 				},
 				Data: map[string]string{
-					extension.ColocationConfigKey: "{\"metricAggregateDurationSeconds\":10, \"invalidKey\":\"invalidValue\",}",
+					configuration.ColocationConfigKey: "{\"metricAggregateDurationSeconds\":10, \"invalidKey\":\"invalidValue\",}",
 				},
 			}},
 			wantChanged: false,
@@ -184,24 +188,26 @@ func Test_syncColocationConfigIfChanged(t *testing.T) {
 					Namespace: sloconfig.ConfigNameSpace,
 				},
 				Data: map[string]string{
-					extension.ColocationConfigKey: "{\"metricAggregateDurationSeconds\":60,\"cpuReclaimThresholdPercent\":70," +
+					configuration.ColocationConfigKey: "{\"metricAggregateDurationSeconds\":60,\"cpuReclaimThresholdPercent\":70," +
 						"\"memoryReclaimThresholdPercent\":70,\"updateTimeThresholdSeconds\":100,\"metricReportIntervalSeconds\":20}",
 				},
 			}},
 			wantChanged: true,
 			wantField: &colocationCfgCache{
-				colocationCfg: extension.ColocationCfg{
-					ColocationStrategy: extension.ColocationStrategy{
+				colocationCfg: configuration.ColocationCfg{
+					ColocationStrategy: configuration.ColocationStrategy{
 						Enable:                         pointer.Bool(false),
 						MetricAggregateDurationSeconds: pointer.Int64(60),
 						MetricReportIntervalSeconds:    pointer.Int64(20),
 						MetricAggregatePolicy:          sloconfig.DefaultColocationStrategy().MetricAggregatePolicy,
 						CPUReclaimThresholdPercent:     pointer.Int64(70),
+						CPUCalculatePolicy:             &cpuCalcPolicyByUsage,
 						MemoryReclaimThresholdPercent:  pointer.Int64(70),
 						MemoryCalculatePolicy:          &memoryCalcPolicyByUsage,
 						DegradeTimeMinutes:             pointer.Int64(15),
 						UpdateTimeThresholdSeconds:     pointer.Int64(100),
 						ResourceDiffThreshold:          pointer.Float64(0.1),
+						MetricMemoryCollectPolicy:      &defaultNodeMemoryCollectPolicy,
 					},
 				},
 				available:   true,
@@ -221,7 +227,7 @@ func Test_syncColocationConfigIfChanged(t *testing.T) {
 					Namespace: sloconfig.ConfigNameSpace,
 				},
 				Data: map[string]string{
-					extension.ColocationConfigKey: "{\"metricAggregateDurationSeconds\":60,\"cpuReclaimThresholdPercent\":70," +
+					configuration.ColocationConfigKey: "{\"metricAggregateDurationSeconds\":60,\"cpuReclaimThresholdPercent\":70," +
 						"\"memoryReclaimThresholdPercent\":70,\"updateTimeThresholdSeconds\":-1,\"metricReportIntervalSeconds\":20}",
 				},
 			}},
@@ -244,7 +250,7 @@ func Test_syncColocationConfigIfChanged(t *testing.T) {
 					Namespace: sloconfig.ConfigNameSpace,
 				},
 				Data: map[string]string{
-					extension.ColocationConfigKey: "{\"metricAggregateDurationSeconds\":60,\"cpuReclaimThresholdPercent\":70," +
+					configuration.ColocationConfigKey: "{\"metricAggregateDurationSeconds\":60,\"cpuReclaimThresholdPercent\":70," +
 						"\"memoryReclaimThresholdPercent\":70,\"updateTimeThresholdSeconds\":-1,\"metricReportIntervalSeconds\":20}",
 				},
 			}},
@@ -271,7 +277,7 @@ func Test_syncColocationConfigIfChanged(t *testing.T) {
 					Namespace: sloconfig.ConfigNameSpace,
 				},
 				Data: map[string]string{
-					extension.ColocationConfigKey: "{\"enable\":true,\"metricAggregateDurationSeconds\":30,\"metricReportIntervalSeconds\":20," +
+					configuration.ColocationConfigKey: "{\"enable\":true,\"metricAggregateDurationSeconds\":30,\"metricReportIntervalSeconds\":20," +
 						"\"cpuReclaimThresholdPercent\":70,\"memoryReclaimThresholdPercent\":80,\"updateTimeThresholdSeconds\":300," +
 						"\"degradeTimeMinutes\":5,\"resourceDiffThreshold\":0.1,\"nodeConfigs\":[{\"nodeSelector\":" +
 						"{\"matchLabels\":{\"xxx\":\"yyy\"}},\"metricAggregateDurationSeconds\":-1}]}",
@@ -279,39 +285,43 @@ func Test_syncColocationConfigIfChanged(t *testing.T) {
 			}},
 			wantChanged: true,
 			wantField: &colocationCfgCache{
-				colocationCfg: extension.ColocationCfg{
-					ColocationStrategy: extension.ColocationStrategy{
+				colocationCfg: configuration.ColocationCfg{
+					ColocationStrategy: configuration.ColocationStrategy{
 						Enable:                         pointer.Bool(true),
 						MetricAggregateDurationSeconds: pointer.Int64(30),
 						MetricReportIntervalSeconds:    pointer.Int64(20),
 						MetricAggregatePolicy:          sloconfig.DefaultColocationStrategy().MetricAggregatePolicy,
 						CPUReclaimThresholdPercent:     pointer.Int64(70),
+						CPUCalculatePolicy:             &cpuCalcPolicyByUsage,
 						MemoryReclaimThresholdPercent:  pointer.Int64(80),
 						MemoryCalculatePolicy:          &memoryCalcPolicyByUsage,
 						DegradeTimeMinutes:             pointer.Int64(5),
 						UpdateTimeThresholdSeconds:     pointer.Int64(300),
 						ResourceDiffThreshold:          pointer.Float64(0.1),
+						MetricMemoryCollectPolicy:      &defaultNodeMemoryCollectPolicy,
 					},
-					NodeConfigs: []extension.NodeColocationCfg{
+					NodeConfigs: []configuration.NodeColocationCfg{
 						{
-							NodeCfgProfile: extension.NodeCfgProfile{
+							NodeCfgProfile: configuration.NodeCfgProfile{
 								NodeSelector: &metav1.LabelSelector{
 									MatchLabels: map[string]string{
 										"xxx": "yyy",
 									},
 								},
 							},
-							ColocationStrategy: extension.ColocationStrategy{
+							ColocationStrategy: configuration.ColocationStrategy{
 								Enable:                         pointer.Bool(true),
 								MetricAggregateDurationSeconds: pointer.Int64(30),
 								MetricReportIntervalSeconds:    pointer.Int64(20),
 								MetricAggregatePolicy:          sloconfig.DefaultColocationStrategy().MetricAggregatePolicy,
 								CPUReclaimThresholdPercent:     pointer.Int64(70),
+								CPUCalculatePolicy:             &cpuCalcPolicyByUsage,
 								MemoryReclaimThresholdPercent:  pointer.Int64(80),
 								MemoryCalculatePolicy:          &memoryCalcPolicyByUsage,
 								DegradeTimeMinutes:             pointer.Int64(5),
 								UpdateTimeThresholdSeconds:     pointer.Int64(300),
 								ResourceDiffThreshold:          pointer.Float64(0.1),
+								MetricMemoryCollectPolicy:      &defaultNodeMemoryCollectPolicy,
 							},
 						},
 					},
@@ -336,25 +346,27 @@ func Test_syncColocationConfigIfChanged(t *testing.T) {
 					Namespace: sloconfig.ConfigNameSpace,
 				},
 				Data: map[string]string{
-					extension.ColocationConfigKey: "{\"enable\":true,\"metricAggregateDurationSeconds\":60,\"metricReportIntervalSeconds\":20," +
+					configuration.ColocationConfigKey: "{\"enable\":true,\"metricAggregateDurationSeconds\":60,\"metricReportIntervalSeconds\":20," +
 						"\"cpuReclaimThresholdPercent\":70,\"memoryReclaimThresholdPercent\":80,\"updateTimeThresholdSeconds\":300," +
 						"\"degradeTimeMinutes\":5,\"resourceDiffThreshold\":0.1,\"metricReportIntervalSeconds\":20}",
 				},
 			}},
 			wantChanged: true,
 			wantField: &colocationCfgCache{
-				colocationCfg: extension.ColocationCfg{
-					ColocationStrategy: extension.ColocationStrategy{
+				colocationCfg: configuration.ColocationCfg{
+					ColocationStrategy: configuration.ColocationStrategy{
 						Enable:                         pointer.Bool(true),
 						MetricAggregateDurationSeconds: pointer.Int64(60),
 						MetricReportIntervalSeconds:    pointer.Int64(20),
 						MetricAggregatePolicy:          sloconfig.DefaultColocationStrategy().MetricAggregatePolicy,
 						CPUReclaimThresholdPercent:     pointer.Int64(70),
+						CPUCalculatePolicy:             &cpuCalcPolicyByUsage,
 						MemoryReclaimThresholdPercent:  pointer.Int64(80),
 						MemoryCalculatePolicy:          &memoryCalcPolicyByUsage,
 						DegradeTimeMinutes:             pointer.Int64(5),
 						UpdateTimeThresholdSeconds:     pointer.Int64(300),
 						ResourceDiffThreshold:          pointer.Float64(0.1),
+						MetricMemoryCollectPolicy:      &defaultNodeMemoryCollectPolicy,
 					},
 				},
 				available:   true,
@@ -364,18 +376,20 @@ func Test_syncColocationConfigIfChanged(t *testing.T) {
 		{
 			name: "only cluster config with no change",
 			fields: fields{config: &colocationCfgCache{
-				colocationCfg: extension.ColocationCfg{
-					ColocationStrategy: extension.ColocationStrategy{
+				colocationCfg: configuration.ColocationCfg{
+					ColocationStrategy: configuration.ColocationStrategy{
 						Enable:                         pointer.Bool(true),
 						MetricAggregateDurationSeconds: pointer.Int64(60),
 						MetricReportIntervalSeconds:    pointer.Int64(60),
 						MetricAggregatePolicy:          sloconfig.DefaultColocationStrategy().MetricAggregatePolicy,
 						CPUReclaimThresholdPercent:     pointer.Int64(70),
+						CPUCalculatePolicy:             &cpuCalcPolicyByUsage,
 						MemoryReclaimThresholdPercent:  pointer.Int64(80),
 						MemoryCalculatePolicy:          &memoryCalcPolicyByUsage,
 						DegradeTimeMinutes:             pointer.Int64(5),
 						UpdateTimeThresholdSeconds:     pointer.Int64(300),
 						ResourceDiffThreshold:          pointer.Float64(0.1),
+						MetricMemoryCollectPolicy:      &defaultNodeMemoryCollectPolicy,
 					},
 				},
 				available: true,
@@ -390,25 +404,27 @@ func Test_syncColocationConfigIfChanged(t *testing.T) {
 					Namespace: sloconfig.ConfigNameSpace,
 				},
 				Data: map[string]string{
-					extension.ColocationConfigKey: "{\"enable\":true,\"metricAggregateDurationSeconds\":60,\"metricAggregateDurationSeconds\":60," +
+					configuration.ColocationConfigKey: "{\"enable\":true,\"metricAggregateDurationSeconds\":60,\"metricAggregateDurationSeconds\":60," +
 						"\"cpuReclaimThresholdPercent\":70,\"memoryReclaimThresholdPercent\":80,\"updateTimeThresholdSeconds\":300," +
 						"\"degradeTimeMinutes\":5,\"resourceDiffThreshold\":0.1}",
 				},
 			}},
 			wantChanged: false,
 			wantField: &colocationCfgCache{
-				colocationCfg: extension.ColocationCfg{
-					ColocationStrategy: extension.ColocationStrategy{
+				colocationCfg: configuration.ColocationCfg{
+					ColocationStrategy: configuration.ColocationStrategy{
 						Enable:                         pointer.Bool(true),
 						MetricAggregateDurationSeconds: pointer.Int64(60),
 						MetricReportIntervalSeconds:    pointer.Int64(60),
 						MetricAggregatePolicy:          sloconfig.DefaultColocationStrategy().MetricAggregatePolicy,
 						CPUReclaimThresholdPercent:     pointer.Int64(70),
+						CPUCalculatePolicy:             &cpuCalcPolicyByUsage,
 						MemoryReclaimThresholdPercent:  pointer.Int64(80),
 						MemoryCalculatePolicy:          &memoryCalcPolicyByUsage,
 						DegradeTimeMinutes:             pointer.Int64(5),
 						UpdateTimeThresholdSeconds:     pointer.Int64(300),
 						ResourceDiffThreshold:          pointer.Float64(0.1),
+						MetricMemoryCollectPolicy:      &defaultNodeMemoryCollectPolicy,
 					},
 				},
 				available:   true,
@@ -418,8 +434,8 @@ func Test_syncColocationConfigIfChanged(t *testing.T) {
 		{
 			name: "full config change successfully",
 			fields: fields{config: &colocationCfgCache{
-				colocationCfg: extension.ColocationCfg{
-					ColocationStrategy: extension.ColocationStrategy{
+				colocationCfg: configuration.ColocationCfg{
+					ColocationStrategy: configuration.ColocationStrategy{
 						Enable:                         pointer.Bool(true),
 						MetricAggregateDurationSeconds: pointer.Int64(60),
 						MetricReportIntervalSeconds:    pointer.Int64(60),
@@ -429,17 +445,18 @@ func Test_syncColocationConfigIfChanged(t *testing.T) {
 						DegradeTimeMinutes:             pointer.Int64(5),
 						UpdateTimeThresholdSeconds:     pointer.Int64(300),
 						ResourceDiffThreshold:          pointer.Float64(0.1),
+						MetricMemoryCollectPolicy:      &defaultNodeMemoryCollectPolicy,
 					},
-					NodeConfigs: []extension.NodeColocationCfg{
+					NodeConfigs: []configuration.NodeColocationCfg{
 						{
-							NodeCfgProfile: extension.NodeCfgProfile{
+							NodeCfgProfile: configuration.NodeCfgProfile{
 								NodeSelector: &metav1.LabelSelector{
 									MatchLabels: map[string]string{
 										"xxx": "yyy",
 									},
 								},
 							},
-							ColocationStrategy: extension.ColocationStrategy{
+							ColocationStrategy: configuration.ColocationStrategy{
 								Enable:                         pointer.Bool(true),
 								MetricAggregateDurationSeconds: pointer.Int64(60),
 								MetricReportIntervalSeconds:    pointer.Int64(60),
@@ -449,6 +466,7 @@ func Test_syncColocationConfigIfChanged(t *testing.T) {
 								DegradeTimeMinutes:             pointer.Int64(5),
 								UpdateTimeThresholdSeconds:     pointer.Int64(300),
 								ResourceDiffThreshold:          pointer.Float64(0.1),
+								MetricMemoryCollectPolicy:      &defaultNodeMemoryCollectPolicy,
 							},
 						},
 					},
@@ -466,7 +484,7 @@ func Test_syncColocationConfigIfChanged(t *testing.T) {
 					Namespace: sloconfig.ConfigNameSpace,
 				},
 				Data: map[string]string{
-					extension.ColocationConfigKey: `
+					configuration.ColocationConfigKey: `
 {
     "enable": true,
     "metricAggregateDurationSeconds": 60,
@@ -492,13 +510,14 @@ func Test_syncColocationConfigIfChanged(t *testing.T) {
 			}},
 			wantChanged: true,
 			wantField: &colocationCfgCache{
-				colocationCfg: extension.ColocationCfg{
-					ColocationStrategy: extension.ColocationStrategy{
+				colocationCfg: configuration.ColocationCfg{
+					ColocationStrategy: configuration.ColocationStrategy{
 						Enable:                         pointer.Bool(true),
 						MetricAggregateDurationSeconds: pointer.Int64(60),
 						MetricReportIntervalSeconds:    pointer.Int64(20),
 						MetricAggregatePolicy:          sloconfig.DefaultColocationStrategy().MetricAggregatePolicy,
 						CPUReclaimThresholdPercent:     pointer.Int64(70),
+						CPUCalculatePolicy:             &cpuCalcPolicyByUsage,
 						MemoryReclaimThresholdPercent:  pointer.Int64(80),
 						MemoryCalculatePolicy:          &memoryCalcPolicyByUsage,
 						DegradeTimeMinutes:             pointer.Int64(5),
@@ -506,22 +525,24 @@ func Test_syncColocationConfigIfChanged(t *testing.T) {
 						ResourceDiffThreshold:          pointer.Float64(0.1),
 						MidCPUThresholdPercent:         pointer.Int64(45),
 						MidMemoryThresholdPercent:      pointer.Int64(65),
+						MetricMemoryCollectPolicy:      &defaultNodeMemoryCollectPolicy,
 					},
-					NodeConfigs: []extension.NodeColocationCfg{
+					NodeConfigs: []configuration.NodeColocationCfg{
 						{
-							NodeCfgProfile: extension.NodeCfgProfile{
+							NodeCfgProfile: configuration.NodeCfgProfile{
 								NodeSelector: &metav1.LabelSelector{
 									MatchLabels: map[string]string{
 										"xxx": "yyy",
 									},
 								},
 							},
-							ColocationStrategy: extension.ColocationStrategy{
+							ColocationStrategy: configuration.ColocationStrategy{
 								Enable:                         pointer.Bool(true),
 								MetricAggregateDurationSeconds: pointer.Int64(60),
 								MetricReportIntervalSeconds:    pointer.Int64(20),
 								MetricAggregatePolicy:          sloconfig.DefaultColocationStrategy().MetricAggregatePolicy,
 								CPUReclaimThresholdPercent:     pointer.Int64(70),
+								CPUCalculatePolicy:             &cpuCalcPolicyByUsage,
 								MemoryReclaimThresholdPercent:  pointer.Int64(80),
 								MemoryCalculatePolicy:          &memoryCalcPolicyByUsage,
 								DegradeTimeMinutes:             pointer.Int64(5),
@@ -529,6 +550,7 @@ func Test_syncColocationConfigIfChanged(t *testing.T) {
 								ResourceDiffThreshold:          pointer.Float64(0.1),
 								MidCPUThresholdPercent:         pointer.Int64(45),
 								MidMemoryThresholdPercent:      pointer.Int64(65),
+								MetricMemoryCollectPolicy:      &defaultNodeMemoryCollectPolicy,
 							},
 						},
 					},
@@ -540,22 +562,24 @@ func Test_syncColocationConfigIfChanged(t *testing.T) {
 		{
 			name: "node config with change",
 			fields: fields{config: &colocationCfgCache{
-				colocationCfg: extension.ColocationCfg{
-					ColocationStrategy: extension.ColocationStrategy{
+				colocationCfg: configuration.ColocationCfg{
+					ColocationStrategy: configuration.ColocationStrategy{
 						Enable:                         pointer.Bool(true),
 						MetricAggregateDurationSeconds: pointer.Int64(60),
 						MetricReportIntervalSeconds:    pointer.Int64(60),
 						MetricAggregatePolicy:          sloconfig.DefaultColocationStrategy().MetricAggregatePolicy,
 						CPUReclaimThresholdPercent:     pointer.Int64(70),
+						CPUCalculatePolicy:             &cpuCalcPolicyByUsage,
 						MemoryReclaimThresholdPercent:  pointer.Int64(80),
 						MemoryCalculatePolicy:          &memoryCalcPolicyByUsage,
 						DegradeTimeMinutes:             pointer.Int64(5),
 						UpdateTimeThresholdSeconds:     pointer.Int64(300),
 						ResourceDiffThreshold:          pointer.Float64(0.1),
+						MetricMemoryCollectPolicy:      &defaultNodeMemoryCollectPolicy,
 					},
-					NodeConfigs: []extension.NodeColocationCfg{
+					NodeConfigs: []configuration.NodeColocationCfg{
 						{
-							NodeCfgProfile: extension.NodeCfgProfile{
+							NodeCfgProfile: configuration.NodeCfgProfile{
 								NodeSelector: &metav1.LabelSelector{
 									MatchLabels: map[string]string{
 										"aaa": "bbbb",
@@ -563,7 +587,7 @@ func Test_syncColocationConfigIfChanged(t *testing.T) {
 								},
 								Name: "aaa-bbbb",
 							},
-							ColocationStrategy: extension.ColocationStrategy{
+							ColocationStrategy: configuration.ColocationStrategy{
 								Enable: pointer.Bool(true),
 							},
 						},
@@ -581,31 +605,33 @@ func Test_syncColocationConfigIfChanged(t *testing.T) {
 					Namespace: sloconfig.ConfigNameSpace,
 				},
 				Data: map[string]string{
-					extension.ColocationConfigKey: "{\"enable\":true,\"metricAggregateDurationSeconds\":30,\"metricReportIntervalSeconds\":20," +
+					configuration.ColocationConfigKey: "{\"enable\":true,\"metricAggregateDurationSeconds\":30,\"metricReportIntervalSeconds\":20," +
 						"\"cpuReclaimThresholdPercent\":70,\"memoryReclaimThresholdPercent\":80,\"memoryCalculatePolicy\":\"request\"," +
 						"\"updateTimeThresholdSeconds\":300," +
 						"\"degradeTimeMinutes\":5,\"resourceDiffThreshold\":0.1,\"nodeConfigs\":[{\"nodeSelector\":" +
-						"{\"matchLabels\":{\"xxx\":\"yyy\"}},\"name\":\"xxx-yyy\",\"enable\":true,\"cpuReclaimThresholdPercent\":60}]}",
+						"{\"matchLabels\":{\"xxx\":\"yyy\"}},\"name\":\"xxx-yyy\",\"enable\":true,\"cpuReclaimThresholdPercent\":60, \"cpuCalculatePolicy\": \"\"}]}",
 				},
 			}},
 			wantChanged: true,
 			wantField: &colocationCfgCache{
-				colocationCfg: extension.ColocationCfg{
-					ColocationStrategy: extension.ColocationStrategy{
+				colocationCfg: configuration.ColocationCfg{
+					ColocationStrategy: configuration.ColocationStrategy{
 						Enable:                         pointer.Bool(true),
 						MetricAggregateDurationSeconds: pointer.Int64(30),
 						MetricReportIntervalSeconds:    pointer.Int64(20),
 						MetricAggregatePolicy:          sloconfig.DefaultColocationStrategy().MetricAggregatePolicy,
 						CPUReclaimThresholdPercent:     pointer.Int64(70),
+						CPUCalculatePolicy:             &cpuCalcPolicyByUsage,
 						MemoryReclaimThresholdPercent:  pointer.Int64(80),
 						MemoryCalculatePolicy:          &memoryCalcPolicyByRequest,
 						DegradeTimeMinutes:             pointer.Int64(5),
 						UpdateTimeThresholdSeconds:     pointer.Int64(300),
 						ResourceDiffThreshold:          pointer.Float64(0.1),
+						MetricMemoryCollectPolicy:      &defaultNodeMemoryCollectPolicy,
 					},
-					NodeConfigs: []extension.NodeColocationCfg{
+					NodeConfigs: []configuration.NodeColocationCfg{
 						{
-							NodeCfgProfile: extension.NodeCfgProfile{
+							NodeCfgProfile: configuration.NodeCfgProfile{
 								NodeSelector: &metav1.LabelSelector{
 									MatchLabels: map[string]string{
 										"xxx": "yyy",
@@ -613,7 +639,7 @@ func Test_syncColocationConfigIfChanged(t *testing.T) {
 								},
 								Name: "xxx-yyy",
 							},
-							ColocationStrategy: extension.ColocationStrategy{
+							ColocationStrategy: configuration.ColocationStrategy{
 								Enable:                         pointer.Bool(true),
 								MetricAggregateDurationSeconds: pointer.Int64(30),
 								MetricReportIntervalSeconds:    pointer.Int64(20),
@@ -623,8 +649,10 @@ func Test_syncColocationConfigIfChanged(t *testing.T) {
 								DegradeTimeMinutes:             pointer.Int64(5),
 								UpdateTimeThresholdSeconds:     pointer.Int64(300),
 								ResourceDiffThreshold:          pointer.Float64(0.1),
+								MetricMemoryCollectPolicy:      &defaultNodeMemoryCollectPolicy,
 								//change
 								CPUReclaimThresholdPercent: pointer.Int64(60),
+								CPUCalculatePolicy:         &cpuCalcPolicyNew,
 							},
 						},
 					},
@@ -650,7 +678,9 @@ func Test_syncColocationConfigIfChanged(t *testing.T) {
 
 func Test_IsCfgAvailable(t *testing.T) {
 	defaultConfig := sloconfig.DefaultColocationCfg()
-	memoryCalcPolicyByUsage := extension.CalculateByPodUsage
+	memoryCalcPolicyByUsage := configuration.CalculateByPodUsage
+	cpuCalcPolicyByUsage := configuration.CalculateByPodUsage
+	var defaultNodeMemoryCollectPolicy = slov1alpha1.UsageWithoutPageCache
 	type fields struct {
 		config    *colocationCfgCache
 		configMap *corev1.ConfigMap
@@ -659,7 +689,7 @@ func Test_IsCfgAvailable(t *testing.T) {
 		name      string
 		fields    fields
 		want      bool
-		wantField *extension.ColocationCfg
+		wantField *configuration.ColocationCfg
 	}{
 		{
 			name: "directly return available",
@@ -669,14 +699,14 @@ func Test_IsCfgAvailable(t *testing.T) {
 				},
 			},
 			want:      true,
-			wantField: &extension.ColocationCfg{},
+			wantField: &configuration.ColocationCfg{},
 		},
 		{
 			name: "set default when config is not found",
 			fields: fields{
 				config: &colocationCfgCache{
-					colocationCfg: extension.ColocationCfg{
-						ColocationStrategy: extension.ColocationStrategy{
+					colocationCfg: configuration.ColocationCfg{
+						ColocationStrategy: configuration.ColocationStrategy{
 							MetricAggregateDurationSeconds: pointer.Int64(60),
 						},
 					},
@@ -690,8 +720,8 @@ func Test_IsCfgAvailable(t *testing.T) {
 			name: "use cluster config",
 			fields: fields{
 				config: &colocationCfgCache{
-					colocationCfg: extension.ColocationCfg{
-						ColocationStrategy: extension.ColocationStrategy{
+					colocationCfg: configuration.ColocationCfg{
+						ColocationStrategy: configuration.ColocationStrategy{
 							MetricAggregateDurationSeconds: pointer.Int64(60),
 						},
 					},
@@ -707,25 +737,27 @@ func Test_IsCfgAvailable(t *testing.T) {
 						Namespace: sloconfig.ConfigNameSpace,
 					},
 					Data: map[string]string{
-						extension.ColocationConfigKey: "{\"enable\":true,\"metricAggregateDurationSeconds\":60," +
+						configuration.ColocationConfigKey: "{\"enable\":true,\"metricAggregateDurationSeconds\":60," +
 							"\"cpuReclaimThresholdPercent\":70,\"memoryReclaimThresholdPercent\":80,\"updateTimeThresholdSeconds\":300," +
 							"\"degradeTimeMinutes\":5,\"resourceDiffThreshold\":0.1}",
 					},
 				},
 			},
 			want: true,
-			wantField: &extension.ColocationCfg{
-				ColocationStrategy: extension.ColocationStrategy{
+			wantField: &configuration.ColocationCfg{
+				ColocationStrategy: configuration.ColocationStrategy{
 					Enable:                         pointer.Bool(true),
 					MetricAggregateDurationSeconds: pointer.Int64(60),
 					MetricAggregatePolicy:          sloconfig.DefaultColocationStrategy().MetricAggregatePolicy,
 					CPUReclaimThresholdPercent:     pointer.Int64(70),
+					CPUCalculatePolicy:             &cpuCalcPolicyByUsage,
 					MemoryReclaimThresholdPercent:  pointer.Int64(80),
 					MemoryCalculatePolicy:          &memoryCalcPolicyByUsage,
 					DegradeTimeMinutes:             pointer.Int64(5),
 					UpdateTimeThresholdSeconds:     pointer.Int64(300),
 					ResourceDiffThreshold:          pointer.Float64(0.1),
 					MetricReportIntervalSeconds:    pointer.Int64(60),
+					MetricMemoryCollectPolicy:      &defaultNodeMemoryCollectPolicy,
 				},
 			},
 		},

@@ -22,9 +22,10 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
-	"k8s.io/apimachinery/pkg/util/clock"
 	"k8s.io/klog/v2"
+	"k8s.io/utils/clock"
 
+	"github.com/koordinator-sh/koordinator/apis/configuration"
 	"github.com/koordinator-sh/koordinator/apis/extension"
 	slov1alpha1 "github.com/koordinator-sh/koordinator/apis/slo/v1alpha1"
 	"github.com/koordinator-sh/koordinator/pkg/slo-controller/metrics"
@@ -37,7 +38,7 @@ const PluginName = "MidResource"
 // ResourceNames defines the Mid-tier extended resource names to update.
 var ResourceNames = []corev1.ResourceName{extension.MidCPU, extension.MidMemory}
 
-var clk clock.Clock = clock.RealClock{} // for testing
+var clk clock.WithTickerAndDelayedExecution = clock.RealClock{} // for testing
 
 type Plugin struct{}
 
@@ -45,7 +46,7 @@ func (p *Plugin) Name() string {
 	return PluginName
 }
 
-func (p *Plugin) NeedSync(strategy *extension.ColocationStrategy, oldNode, newNode *corev1.Node) (bool, string) {
+func (p *Plugin) NeedSync(strategy *configuration.ColocationStrategy, oldNode, newNode *corev1.Node) (bool, string) {
 	// mid resource diff is bigger than ResourceDiffThreshold
 	resourcesToDiff := ResourceNames
 	for _, resourceName := range resourcesToDiff {
@@ -60,7 +61,7 @@ func (p *Plugin) NeedSync(strategy *extension.ColocationStrategy, oldNode, newNo
 	return false, ""
 }
 
-func (p *Plugin) Execute(strategy *extension.ColocationStrategy, node *corev1.Node, nr *framework.NodeResource) error {
+func (p *Plugin) Prepare(_ *configuration.ColocationStrategy, node *corev1.Node, nr *framework.NodeResource) error {
 	for _, resourceName := range ResourceNames {
 		prepareNodeForResource(node, nr, resourceName)
 	}
@@ -80,7 +81,7 @@ func (p *Plugin) Reset(node *corev1.Node, message string) []framework.ResourceIt
 
 // Calculate calculates Mid resources using the formula below:
 // min(ProdReclaimable, NodeAllocable * MidThresholdRatio).
-func (p *Plugin) Calculate(strategy *extension.ColocationStrategy, node *corev1.Node, podList *corev1.PodList,
+func (p *Plugin) Calculate(strategy *configuration.ColocationStrategy, node *corev1.Node, podList *corev1.PodList,
 	metrics *framework.ResourceMetrics) ([]framework.ResourceItem, error) {
 	if strategy == nil || node == nil || node.Status.Allocatable == nil || podList == nil ||
 		metrics == nil || metrics.NodeMetric == nil {
@@ -89,7 +90,7 @@ func (p *Plugin) Calculate(strategy *extension.ColocationStrategy, node *corev1.
 
 	// if the node metric is abnormal, do degraded calculation
 	if p.isDegradeNeeded(strategy, metrics.NodeMetric, node) {
-		klog.InfoS("node Mid-tier need degradation, reset node resources", "node", node.Name)
+		klog.V(5).InfoS("node Mid-tier need degradation, reset node resources", "node", node.Name)
 		return p.degradeCalculate(node,
 			"degrade node Mid resource because of abnormal nodeMetric, reason: degradedByMidResource"), nil
 	}
@@ -97,7 +98,7 @@ func (p *Plugin) Calculate(strategy *extension.ColocationStrategy, node *corev1.
 	return p.calculate(strategy, node, podList, metrics), nil
 }
 
-func (p *Plugin) isDegradeNeeded(strategy *extension.ColocationStrategy, nodeMetric *slov1alpha1.NodeMetric, node *corev1.Node) bool {
+func (p *Plugin) isDegradeNeeded(strategy *configuration.ColocationStrategy, nodeMetric *slov1alpha1.NodeMetric, node *corev1.Node) bool {
 	if nodeMetric == nil || nodeMetric.Status.UpdateTime == nil {
 		klog.V(4).Infof("need degradation for Mid-tier, err: invalid nodeMetric %v", nodeMetric)
 		return true
@@ -124,7 +125,7 @@ func (p *Plugin) degradeCalculate(node *corev1.Node, message string) []framework
 	return p.Reset(node, message)
 }
 
-func (p *Plugin) calculate(strategy *extension.ColocationStrategy, node *corev1.Node, podList *corev1.PodList,
+func (p *Plugin) calculate(strategy *configuration.ColocationStrategy, node *corev1.Node, podList *corev1.PodList,
 	resourceMetrics *framework.ResourceMetrics) []framework.ResourceItem {
 	// MidAllocatable := min(NodeAllocatable * thresholdRatio, ProdReclaimable)
 	prodReclaimable := resourceMetrics.NodeMetric.Status.ProdReclaimableMetric.Resource
@@ -187,8 +188,8 @@ func prepareNodeForResource(node *corev1.Node, nr *framework.NodeResource, name 
 		delete(node.Status.Allocatable, name)
 	} else {
 		if _, ok := q.AsInt64(); !ok {
-			klog.V(2).InfoS("node mid resource's quantity is not int64 and will be rounded",
-				"resource", name, "original", *q)
+			klog.V(4).InfoS("node mid resource's quantity is not int64 and will be rounded",
+				"node", node.Name, "resource", name, "original", *q, "rounded", q.Value())
 			q.Set(q.Value())
 		}
 		node.Status.Capacity[name] = *q

@@ -21,6 +21,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	quotav1 "k8s.io/apiserver/pkg/quota/v1"
 	resourceapi "k8s.io/kubernetes/pkg/api/v1/resource"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 
@@ -60,7 +61,7 @@ func (e *DefaultEstimator) EstimatePod(pod *corev1.Pod) (map[corev1.ResourceName
 func estimatedPodUsed(pod *corev1.Pod, resourceWeights map[corev1.ResourceName]int64, scalingFactors map[corev1.ResourceName]int64) map[corev1.ResourceName]int64 {
 	requests, limits := resourceapi.PodRequestsAndLimits(pod)
 	estimatedUsed := make(map[corev1.ResourceName]int64)
-	priorityClass := extension.GetPriorityClass(pod)
+	priorityClass := extension.GetPodPriorityClassWithDefault(pod)
 	for resourceName := range resourceWeights {
 		realResourceName := extension.TranslateResourceNameByPriorityClass(priorityClass, resourceName)
 		estimatedUsed[resourceName] = estimatedUsedByResource(requests, limits, realResourceName, scalingFactors[resourceName])
@@ -107,5 +108,22 @@ func estimatedUsedByResource(requests, limits corev1.ResourceList, resourceName 
 }
 
 func (e *DefaultEstimator) EstimateNode(node *corev1.Node) (corev1.ResourceList, error) {
-	return node.Status.Allocatable, nil
+	rawAllocatable, err := extension.GetNodeRawAllocatable(node.Annotations)
+	if err != nil {
+		return node.Status.Allocatable, nil
+	}
+	if len(rawAllocatable) == 0 {
+		return node.Status.Allocatable, nil
+	}
+	if quotav1.Equals(rawAllocatable, node.Status.Allocatable) {
+		return node.Status.Allocatable, nil
+	}
+	allocatableCopy := node.Status.Allocatable.DeepCopy()
+	if allocatableCopy == nil {
+		allocatableCopy = corev1.ResourceList{}
+	}
+	for k, v := range rawAllocatable {
+		allocatableCopy[k] = v
+	}
+	return allocatableCopy, nil
 }

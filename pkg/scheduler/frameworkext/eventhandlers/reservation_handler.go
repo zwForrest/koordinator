@@ -18,7 +18,6 @@ package eventhandlers
 
 import (
 	"context"
-	"math"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -30,7 +29,6 @@ import (
 	"k8s.io/kubernetes/pkg/scheduler"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/profile"
-	"k8s.io/utils/pointer"
 
 	schedulingv1alpha1 "github.com/koordinator-sh/koordinator/apis/scheduling/v1alpha1"
 	koordclientset "github.com/koordinator-sh/koordinator/pkg/client/clientset/versioned"
@@ -50,12 +48,29 @@ func MakeReservationErrorHandler(
 	schedAdapter frameworkext.Scheduler,
 	koordClientSet koordclientset.Interface,
 	koordSharedInformerFactory koordinatorinformers.SharedInformerFactory,
-) frameworkext.ErrorHandler {
+) frameworkext.PreErrorHandlerFilter {
 	reservationLister := koordSharedInformerFactory.Scheduling().V1alpha1().Reservations().Lister()
 	reservationErrorFn := makeReservationErrorFunc(schedAdapter, reservationLister)
 	return func(podInfo *framework.QueuedPodInfo, schedulingErr error) bool {
 		pod := podInfo.Pod
+		fwk, ok := sched.Profiles[pod.Spec.SchedulerName]
+		if !ok {
+			klog.Errorf("profile not found for scheduler name %q", pod.Spec.SchedulerName)
+			return true
+		}
+
 		// if the pod is not a reserve pod, use the default error handler
+		// If the Pod failed to schedule or no post-filter plugins, should remove exist NominatedReservation of the Pod.
+		if _, ok := schedulingErr.(*framework.FitError); !ok || !fwk.HasPostFilterPlugins() {
+			if extendedHandle, ok := fwk.(frameworkext.ExtendedHandle); ok {
+				if !reservationutil.IsReservePod(pod) {
+					extendedHandle.GetReservationNominator().RemoveNominatedReservations(pod)
+				} else {
+					extendedHandle.GetReservationNominator().DeleteNominatedReservePod(pod)
+				}
+			}
+		}
+
 		if !reservationutil.IsReservePod(pod) {
 			return false
 		}
@@ -65,12 +80,6 @@ func MakeReservationErrorHandler(
 		rName := reservationutil.GetReservationNameFromReservePod(pod)
 		r, err := reservationLister.Get(rName)
 		if err != nil {
-			return true
-		}
-
-		fwk, ok := sched.Profiles[pod.Spec.SchedulerName]
-		if !ok {
-			klog.Errorf("profile not found for scheduler name %q", pod.Spec.SchedulerName)
 			return true
 		}
 
@@ -269,8 +278,6 @@ func addReservationToSchedulerCache(sched frameworkext.Scheduler, obj interface{
 
 	// update pod cache and trigger pod assigned event for scheduling queue
 	reservePod := reservationutil.NewReservePod(r)
-	// Forces priority to be set to maximum to prevent preemption.
-	reservePod.Spec.Priority = pointer.Int32(math.MaxInt32)
 	if err = sched.GetCache().AddPod(reservePod); err != nil {
 		klog.ErrorS(err, "Failed to add reservation into SchedulerCache", "reservation", klog.KObj(reservePod))
 	} else {
@@ -333,9 +340,6 @@ func updateReservationInSchedulerCache(sched frameworkext.Scheduler, oldObj, new
 	}
 	oldReservePod := reservationutil.NewReservePod(oldR)
 	newReservePod := reservationutil.NewReservePod(newR)
-	// Forces priority to be set to maximum to prevent preemption.
-	oldReservePod.Spec.Priority = pointer.Int32(math.MaxInt32)
-	newReservePod.Spec.Priority = pointer.Int32(math.MaxInt32)
 	if err := sched.GetCache().UpdatePod(oldReservePod, newReservePod); err != nil {
 		klog.ErrorS(err, "Failed to update reservation into SchedulerCache", "reservation", klog.KObj(newR))
 	} else {
@@ -375,8 +379,6 @@ func deleteReservationFromSchedulerCache(sched frameworkext.Scheduler, obj inter
 	}
 
 	reservePod := reservationutil.NewReservePod(r)
-	// Forces priority to be set to maximum to prevent preemption.
-	reservePod.Spec.Priority = pointer.Int32(math.MaxInt32)
 	if _, err = sched.GetCache().GetPod(reservePod); err == nil {
 		if len(rInfo.AllocatedPorts) > 0 {
 			allocatablePorts := util.RequestedHostPorts(reservePod)
@@ -395,7 +397,7 @@ func deleteReservationFromSchedulerCache(sched frameworkext.Scheduler, obj inter
 			klog.V(4).InfoS("Successfully delete reservation from SchedulerCache", "reservation", klog.KObj(r))
 		}
 
-		sched.GetSchedulingQueue().MoveAllToActiveOrBackoffQueue(frameworkext.AssignedPodDelete)
+		sched.GetSchedulingQueue().MoveAllToActiveOrBackoffQueue(frameworkext.AssignedPodDelete, nil)
 	}
 }
 

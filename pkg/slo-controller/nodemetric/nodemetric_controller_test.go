@@ -37,7 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	"github.com/koordinator-sh/koordinator/apis/extension"
+	"github.com/koordinator-sh/koordinator/apis/configuration"
 	slov1alpha1 "github.com/koordinator-sh/koordinator/apis/slo/v1alpha1"
 	"github.com/koordinator-sh/koordinator/pkg/slo-controller/config"
 	"github.com/koordinator-sh/koordinator/pkg/util/sloconfig"
@@ -103,7 +103,7 @@ func TestNodeMetricReconciler_getNodeMetricSpec(t *testing.T) {
 					Namespace: sloconfig.ConfigNameSpace,
 				},
 				Data: map[string]string{
-					extension.ColocationConfigKey: "invalid contents",
+					configuration.ColocationConfigKey: "invalid contents",
 				},
 			}},
 			args: args{
@@ -125,7 +125,7 @@ func TestNodeMetricReconciler_getNodeMetricSpec(t *testing.T) {
 					Namespace: sloconfig.ConfigNameSpace,
 				},
 				Data: map[string]string{
-					extension.ColocationConfigKey: "{\"enable\":true}",
+					configuration.ColocationConfigKey: "{\"enable\":true}",
 				},
 			}},
 			args: args{
@@ -147,7 +147,7 @@ func TestNodeMetricReconciler_getNodeMetricSpec(t *testing.T) {
 					Namespace: sloconfig.ConfigNameSpace,
 				},
 				Data: map[string]string{
-					extension.ColocationConfigKey: "{\"enable\":true,\"metricAggregateDurationSeconds\":10,\"metricReportIntervalSeconds\":30}",
+					configuration.ColocationConfigKey: "{\"enable\":true,\"metricAggregateDurationSeconds\":10,\"metricReportIntervalSeconds\":30}",
 				},
 			}},
 			args: args{node: &corev1.Node{
@@ -162,6 +162,7 @@ func TestNodeMetricReconciler_getNodeMetricSpec(t *testing.T) {
 					AggregateDurationSeconds: pointer.Int64(10),
 					ReportIntervalSeconds:    pointer.Int64(30),
 					NodeAggregatePolicy:      getDefaultSpec().CollectPolicy.NodeAggregatePolicy,
+					NodeMemoryCollectPolicy:  getDefaultSpec().CollectPolicy.NodeMemoryCollectPolicy,
 				},
 			},
 			wantErr: false,
@@ -178,7 +179,7 @@ func TestNodeMetricReconciler_getNodeMetricSpec(t *testing.T) {
 					Namespace: sloconfig.ConfigNameSpace,
 				},
 				Data: map[string]string{
-					extension.ColocationConfigKey: "{\"metricAggregateDurationSeconds\":-10}",
+					configuration.ColocationConfigKey: "{\"metricAggregateDurationSeconds\":-10}",
 				},
 			}},
 			args:    args{node: &corev1.Node{}},
@@ -197,7 +198,7 @@ func TestNodeMetricReconciler_getNodeMetricSpec(t *testing.T) {
 					Namespace: sloconfig.ConfigNameSpace,
 				},
 				Data: map[string]string{
-					extension.ColocationConfigKey: "{\"enable\":true,\"metricAggregateDurationSeconds\":30," +
+					configuration.ColocationConfigKey: "{\"enable\":true,\"metricAggregateDurationSeconds\":30," +
 						"\"cpuReclaimThresholdPercent\":70,\"memoryReclaimThresholdPercent\":80,\"updateTimeThresholdSeconds\":300," +
 						"\"degradeTimeMinutes\":5,\"resourceDiffThreshold\":0.1,\"nodeConfigs\":[{\"nodeSelector\":" +
 						"{\"matchLabels\":{\"xxx\":\"yyy\"}},\"metricAggregateDurationSeconds\":20}]}",
@@ -215,6 +216,7 @@ func TestNodeMetricReconciler_getNodeMetricSpec(t *testing.T) {
 					AggregateDurationSeconds: pointer.Int64(20),
 					ReportIntervalSeconds:    getDefaultSpec().CollectPolicy.ReportIntervalSeconds,
 					NodeAggregatePolicy:      getDefaultSpec().CollectPolicy.NodeAggregatePolicy,
+					NodeMemoryCollectPolicy:  getDefaultSpec().CollectPolicy.NodeMemoryCollectPolicy,
 				},
 			},
 			wantErr: false,
@@ -231,7 +233,7 @@ func TestNodeMetricReconciler_getNodeMetricSpec(t *testing.T) {
 					Namespace: sloconfig.ConfigNameSpace,
 				},
 				Data: map[string]string{
-					extension.ColocationConfigKey: "{\"enable\":true,\"metricAggregateDurationSeconds\":30," +
+					configuration.ColocationConfigKey: "{\"enable\":true,\"metricAggregateDurationSeconds\":30," +
 						"\"cpuReclaimThresholdPercent\":70,\"memoryReclaimThresholdPercent\":80,\"updateTimeThresholdSeconds\":300," +
 						"\"degradeTimeMinutes\":5,\"resourceDiffThreshold\":0.1,\"nodeConfigs\":[{\"nodeSelector\":" +
 						"{\"matchLabels\":{\"xxx\":\"yyy\"}},\"metricAggregateDurationSeconds\":-1}]}",
@@ -249,6 +251,7 @@ func TestNodeMetricReconciler_getNodeMetricSpec(t *testing.T) {
 					AggregateDurationSeconds: pointer.Int64(30),
 					ReportIntervalSeconds:    getDefaultSpec().CollectPolicy.ReportIntervalSeconds,
 					NodeAggregatePolicy:      getDefaultSpec().CollectPolicy.NodeAggregatePolicy,
+					NodeMemoryCollectPolicy:  getDefaultSpec().CollectPolicy.NodeMemoryCollectPolicy,
 				},
 			},
 			wantErr: false,
@@ -265,7 +268,7 @@ func TestNodeMetricReconciler_getNodeMetricSpec(t *testing.T) {
 					Namespace: sloconfig.ConfigNameSpace,
 				},
 				Data: map[string]string{
-					extension.ColocationConfigKey: "{\"enable\":true,\"metricAggregateDurationSeconds\":30,\"metricReportIntervalSeconds\":50," +
+					configuration.ColocationConfigKey: "{\"enable\":true,\"metricAggregateDurationSeconds\":30,\"metricReportIntervalSeconds\":50," +
 						"\"nodeConfigs\":[{\"nodeSelector\":{\"matchLabels\":{\"xxx\":\"yyy\"}}," +
 						"\"name\":\"xxx-yyy\"," +
 						"\"metricAggregateDurationSeconds\":10},{\"nodeSelector\":" +
@@ -284,6 +287,7 @@ func TestNodeMetricReconciler_getNodeMetricSpec(t *testing.T) {
 					AggregateDurationSeconds: pointer.Int64(10),
 					ReportIntervalSeconds:    pointer.Int64(50),
 					NodeAggregatePolicy:      getDefaultSpec().CollectPolicy.NodeAggregatePolicy,
+					NodeMemoryCollectPolicy:  getDefaultSpec().CollectPolicy.NodeMemoryCollectPolicy,
 				},
 			},
 			wantErr: false,
@@ -352,7 +356,7 @@ func TestNodeMetricReconciler_initNodeMetric(t *testing.T) {
 					Namespace: sloconfig.ConfigNameSpace,
 				},
 				Data: map[string]string{
-					extension.ColocationConfigKey: "{\"enable\":true,\"metricAggregateDurationSeconds\":10,\"metricReportIntervalSeconds\":20}",
+					configuration.ColocationConfigKey: "{\"enable\":true,\"metricAggregateDurationSeconds\":10,\"metricReportIntervalSeconds\":20}",
 				},
 			}},
 			want: &slov1alpha1.NodeMetricSpec{
@@ -360,6 +364,7 @@ func TestNodeMetricReconciler_initNodeMetric(t *testing.T) {
 					AggregateDurationSeconds: pointer.Int64(10),
 					ReportIntervalSeconds:    pointer.Int64(20),
 					NodeAggregatePolicy:      getDefaultSpec().CollectPolicy.NodeAggregatePolicy,
+					NodeMemoryCollectPolicy:  getDefaultSpec().CollectPolicy.NodeMemoryCollectPolicy,
 				},
 			},
 			wantErr: false,
@@ -380,7 +385,7 @@ func TestNodeMetricReconciler_initNodeMetric(t *testing.T) {
 					Namespace: sloconfig.ConfigNameSpace,
 				},
 				Data: map[string]string{
-					extension.ColocationConfigKey: `
+					configuration.ColocationConfigKey: `
 {
   "enable": true,
   "metricAggregateDurationSeconds": 10,
@@ -407,6 +412,7 @@ func TestNodeMetricReconciler_initNodeMetric(t *testing.T) {
 							{Duration: 10 * time.Minute},
 						},
 					},
+					NodeMemoryCollectPolicy: getDefaultSpec().CollectPolicy.NodeMemoryCollectPolicy,
 				},
 			},
 			wantErr: false,
@@ -518,6 +524,7 @@ func Test_CreateNodeMetricAndUpdateUnmarshalError(t *testing.T) {
 			AggregateDurationSeconds: cfg.MetricAggregateDurationSeconds,
 			ReportIntervalSeconds:    cfg.MetricReportIntervalSeconds,
 			NodeAggregatePolicy:      getDefaultSpec().CollectPolicy.NodeAggregatePolicy,
+			NodeMemoryCollectPolicy:  getDefaultSpec().CollectPolicy.NodeMemoryCollectPolicy,
 		},
 	}
 	assert.Equal(t, wantSpec, &createdNodeMetric.Spec, "create node metric success by valid config")
@@ -572,6 +579,7 @@ func Test_UpdateNodeMetricFromConfigmap(t *testing.T) {
 			AggregateDurationSeconds: cfg.MetricAggregateDurationSeconds,
 			ReportIntervalSeconds:    cfg.MetricReportIntervalSeconds,
 			NodeAggregatePolicy:      getDefaultSpec().CollectPolicy.NodeAggregatePolicy,
+			NodeMemoryCollectPolicy:  getDefaultSpec().CollectPolicy.NodeMemoryCollectPolicy,
 		},
 	}, &nodeMetric.Spec, "update node metric success by valid config")
 }
@@ -598,9 +606,9 @@ func createTestReconciler() (*NodeMetricReconciler, *config.ColocationHandlerFor
 	return reconciler, handler
 }
 
-func createValidColocationConfigMap(t *testing.T) (*extension.ColocationCfg, *corev1.ConfigMap) {
-	policyConfig := &extension.ColocationCfg{
-		ColocationStrategy: extension.ColocationStrategy{
+func createValidColocationConfigMap(t *testing.T) (*configuration.ColocationCfg, *corev1.ConfigMap) {
+	policyConfig := &configuration.ColocationCfg{
+		ColocationStrategy: configuration.ColocationStrategy{
 			Enable:                         pointer.Bool(true),
 			MetricAggregateDurationSeconds: pointer.Int64(60),
 			MetricReportIntervalSeconds:    pointer.Int64(180),
@@ -614,7 +622,7 @@ func createValidColocationConfigMap(t *testing.T) (*extension.ColocationCfg, *co
 			Name:      sloconfig.SLOCtrlConfigMap,
 		},
 		Data: map[string]string{
-			extension.ColocationConfigKey: string(data),
+			configuration.ColocationConfigKey: string(data),
 		},
 	}
 	return policyConfig, configMap
@@ -627,7 +635,7 @@ func createConfigMapUnmashalError() *corev1.ConfigMap {
 			Name:      sloconfig.SLOCtrlConfigMap,
 		},
 		Data: map[string]string{
-			extension.ColocationConfigKey: "invalid contents",
+			configuration.ColocationConfigKey: "invalid contents",
 		},
 	}
 	return configMap

@@ -18,12 +18,16 @@ package metricsadvisor
 
 import (
 	"github.com/koordinator-sh/koordinator/pkg/koordlet/metricsadvisor/collectors/beresource"
-	"github.com/koordinator-sh/koordinator/pkg/koordlet/metricsadvisor/collectors/nodecpuinfo"
+	"github.com/koordinator-sh/koordinator/pkg/koordlet/metricsadvisor/collectors/coldmemoryresource"
+	"github.com/koordinator-sh/koordinator/pkg/koordlet/metricsadvisor/collectors/hostapplication"
+	"github.com/koordinator-sh/koordinator/pkg/koordlet/metricsadvisor/collectors/nodeinfo"
 	"github.com/koordinator-sh/koordinator/pkg/koordlet/metricsadvisor/collectors/noderesource"
 	"github.com/koordinator-sh/koordinator/pkg/koordlet/metricsadvisor/collectors/nodestorageinfo"
+	"github.com/koordinator-sh/koordinator/pkg/koordlet/metricsadvisor/collectors/pagecache"
 	"github.com/koordinator-sh/koordinator/pkg/koordlet/metricsadvisor/collectors/performance"
 	"github.com/koordinator-sh/koordinator/pkg/koordlet/metricsadvisor/collectors/podresource"
 	"github.com/koordinator-sh/koordinator/pkg/koordlet/metricsadvisor/collectors/podthrottled"
+	"github.com/koordinator-sh/koordinator/pkg/koordlet/metricsadvisor/collectors/sysresource"
 	"github.com/koordinator-sh/koordinator/pkg/koordlet/metricsadvisor/devices/gpu"
 	"github.com/koordinator-sh/koordinator/pkg/koordlet/metricsadvisor/framework"
 )
@@ -36,13 +40,17 @@ var (
 	}
 
 	collectorPlugins = map[string]framework.CollectorFactory{
-		noderesource.CollectorName:    noderesource.New,
-		beresource.CollectorName:      beresource.New,
-		nodecpuinfo.CollectorName:     nodecpuinfo.New,
-		nodestorageinfo.CollectorName: nodestorageinfo.New,
-		podresource.CollectorName:     podresource.New,
-		podthrottled.CollectorName:    podthrottled.New,
-		performance.CollectorName:     performance.New,
+		noderesource.CollectorName:       noderesource.New,
+		beresource.CollectorName:         beresource.New,
+		nodeinfo.CollectorName:           nodeinfo.New,
+		nodestorageinfo.CollectorName:    nodestorageinfo.New,
+		podresource.CollectorName:        podresource.New,
+		podthrottled.CollectorName:       podthrottled.New,
+		performance.CollectorName:        performance.New,
+		sysresource.CollectorName:        sysresource.New,
+		coldmemoryresource.CollectorName: coldmemoryresource.New,
+		pagecache.CollectorName:          pagecache.New,
+		hostapplication.CollectorName:    hostapplication.New,
 	}
 
 	podFilters = map[string]framework.PodFilter{

@@ -28,7 +28,7 @@ import (
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/koordinator-sh/koordinator/apis/extension"
+	"github.com/koordinator-sh/koordinator/apis/configuration"
 	slov1alpha1 "github.com/koordinator-sh/koordinator/apis/slo/v1alpha1"
 	"github.com/koordinator-sh/koordinator/pkg/slo-controller/metrics"
 	"github.com/koordinator-sh/koordinator/pkg/slo-controller/noderesource/framework"
@@ -59,12 +59,12 @@ func (r *NodeResourceReconciler) resetNodeResource(node *corev1.Node, message st
 func (r *NodeResourceReconciler) calculateNodeResource(node *corev1.Node,
 	nodeMetric *slov1alpha1.NodeMetric, podList *corev1.PodList) *framework.NodeResource {
 	nr := framework.NewNodeResource()
-	metrics := &framework.ResourceMetrics{
+	resourceMetrics := &framework.ResourceMetrics{
 		NodeMetric: nodeMetric,
 	}
 
 	strategy := sloconfig.GetNodeColocationStrategy(r.cfgCache.GetCfgCopy(), node)
-	framework.RunResourceCalculateExtenders(nr, strategy, node, podList, metrics)
+	framework.RunResourceCalculateExtenders(nr, strategy, node, podList, resourceMetrics)
 
 	return nr
 }
@@ -72,6 +72,9 @@ func (r *NodeResourceReconciler) calculateNodeResource(node *corev1.Node,
 func (r *NodeResourceReconciler) updateNodeResource(node *corev1.Node, nr *framework.NodeResource) error {
 	nodeCopy := node.DeepCopy() // avoid overwriting the cache
 	strategy := sloconfig.GetNodeColocationStrategy(r.cfgCache.GetCfgCopy(), node)
+
+	// pre-update once
+	framework.RunNodePreUpdateExtenders(strategy, node, nr)
 
 	r.prepareNodeResource(strategy, nodeCopy, nr)
 	needSyncStatus, needSyncMeta := r.isNodeResourceSyncNeeded(strategy, node, nodeCopy)
@@ -106,7 +109,7 @@ func (r *NodeResourceReconciler) updateNodeResource(node *corev1.Node, nr *frame
 	return utilerrors.NewAggregate(errList)
 }
 
-func (r *NodeResourceReconciler) updateNodeStatus(node *corev1.Node, strategy *extension.ColocationStrategy, nr *framework.NodeResource) error {
+func (r *NodeResourceReconciler) updateNodeStatus(node *corev1.Node, strategy *configuration.ColocationStrategy, nr *framework.NodeResource) error {
 	nodeCopy := &corev1.Node{}
 	if err := r.Client.Get(context.TODO(), types.NamespacedName{Name: node.Name}, nodeCopy); err != nil {
 		if errors.IsNotFound(err) {
@@ -133,7 +136,7 @@ func (r *NodeResourceReconciler) updateNodeStatus(node *corev1.Node, strategy *e
 	return nil
 }
 
-func (r *NodeResourceReconciler) updateNodeMeta(node *corev1.Node, strategy *extension.ColocationStrategy, nr *framework.NodeResource) error {
+func (r *NodeResourceReconciler) updateNodeMeta(node *corev1.Node, strategy *configuration.ColocationStrategy, nr *framework.NodeResource) error {
 	nodeCopy := &corev1.Node{}
 	if err := r.Client.Get(context.TODO(), types.NamespacedName{Name: node.Name}, nodeCopy); err != nil {
 		if errors.IsNotFound(err) {
@@ -146,38 +149,29 @@ func (r *NodeResourceReconciler) updateNodeMeta(node *corev1.Node, strategy *ext
 		return err
 	}
 
-	nodeCopy = nodeCopy.DeepCopy() // avoid overwriting the cache
-	r.prepareNodeResource(strategy, nodeCopy, nr)
+	newNode := nodeCopy.DeepCopy() // avoid overwriting the cache
+	r.prepareNodeResource(strategy, newNode, nr)
 
-	patch := client.StrategicMergeFrom(nodeCopy)
-	if err := r.Client.Patch(context.Background(), nodeCopy, patch); err != nil {
+	patch := client.MergeFrom(nodeCopy)
+	if err := r.Client.Patch(context.Background(), newNode, patch); err != nil {
 		metrics.RecordNodeResourceReconcileCount(false, "patchNodeMeta")
 		klog.V(4).InfoS("failed to patch node meta for node resource",
-			"node", nodeCopy.Name, "err", err)
+			"node", newNode.Name, "err", err)
 		return err
 	}
 
 	metrics.RecordNodeResourceReconcileCount(true, "patchNodeMeta")
 	klog.V(5).InfoS("successfully patched node meta for node resource",
-		"node", nodeCopy.Name, "patch", patch)
+		"node", newNode.Name, "patch", patch)
 	return nil
 }
 
 // updateNodeExtensions is an extension point for updating node other than node metric resources.
 func (r *NodeResourceReconciler) updateNodeExtensions(node *corev1.Node, nodeMetric *slov1alpha1.NodeMetric, podList *corev1.PodList) error {
-	// update device resources
-	if err := r.updateDeviceResources(node); err != nil {
-		metrics.RecordNodeResourceReconcileCount(false, "updateDeviceResources")
-		klog.V(4).InfoS("failed to update device resources for node", "node", node.Name,
-			"err", err)
-		return err
-	}
-	metrics.RecordNodeResourceReconcileCount(true, "updateDeviceResources")
-
 	return nil
 }
 
-func (r *NodeResourceReconciler) isNodeResourceSyncNeeded(strategy *extension.ColocationStrategy, oldNode, newNode *corev1.Node) (bool, bool) {
+func (r *NodeResourceReconciler) isNodeResourceSyncNeeded(strategy *configuration.ColocationStrategy, oldNode, newNode *corev1.Node) (bool, bool) {
 	if newNode == nil || newNode.Status.Allocatable == nil || newNode.Status.Capacity == nil {
 		klog.ErrorS(fmt.Errorf("invalid node status"), "invalid input, node should be non-nil")
 		return false, false
@@ -189,12 +183,12 @@ func (r *NodeResourceReconciler) isNodeResourceSyncNeeded(strategy *extension.Co
 		needSyncStatus = true
 	}
 
-	isNodeNeedSync := framework.RunNodeSyncExtenders(strategy, oldNode, newNode)
+	isNodeNeedSync := framework.RunNodeStatusCheckExtenders(strategy, oldNode, newNode)
 	if isNodeNeedSync {
 		needSyncStatus = isNodeNeedSync
 		klog.V(6).InfoS("need sync for node by extender", "node", newNode.Name)
 	}
-	isNodeMetaNeedSync := framework.RunNodeMetaSyncExtenders(strategy, oldNode, newNode)
+	isNodeMetaNeedSync := framework.RunNodeMetaCheckExtenders(strategy, oldNode, newNode)
 	if isNodeMetaNeedSync {
 		needSyncMeta = isNodeMetaNeedSync
 		klog.V(6).InfoS("need sync for node meta by extender", "node", newNode.Name)
@@ -207,7 +201,7 @@ func (r *NodeResourceReconciler) isNodeResourceSyncNeeded(strategy *extension.Co
 	return needSyncStatus, needSyncMeta
 }
 
-func (r *NodeResourceReconciler) isCommonNodeNeedSync(strategy *extension.ColocationStrategy, oldNode, newNode *corev1.Node) bool {
+func (r *NodeResourceReconciler) isCommonNodeNeedSync(strategy *configuration.ColocationStrategy, oldNode, newNode *corev1.Node) bool {
 	// update time gap is bigger than UpdateTimeThresholdSeconds
 	lastUpdatedTime, ok := r.NodeSyncContext.Load(util.GenerateNodeKey(&newNode.ObjectMeta))
 	if !ok || r.Clock.Since(lastUpdatedTime) > time.Duration(*strategy.UpdateTimeThresholdSeconds)*time.Second {
@@ -218,6 +212,6 @@ func (r *NodeResourceReconciler) isCommonNodeNeedSync(strategy *extension.Coloca
 	return false
 }
 
-func (r *NodeResourceReconciler) prepareNodeResource(strategy *extension.ColocationStrategy, node *corev1.Node, nr *framework.NodeResource) {
+func (r *NodeResourceReconciler) prepareNodeResource(strategy *configuration.ColocationStrategy, node *corev1.Node, nr *framework.NodeResource) {
 	framework.RunNodePrepareExtenders(strategy, node, nr)
 }

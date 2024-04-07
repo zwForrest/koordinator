@@ -119,6 +119,7 @@ const (
 	CFSBasePeriodValue int64 = 100000
 	CFSQuotaMinValue   int64 = 1000 // min value except `-1`
 	CPUSharesMinValue  int64 = 2
+	CPUSharesMaxValue  int64 = 262144
 	CPUWeightMinValue  int64 = 1
 	CPUWeightMaxValue  int64 = 10000
 
@@ -132,7 +133,9 @@ const (
 	CPUProcsName     = "cgroup.procs"
 	CPUThreadsName   = "cgroup.threads"
 	CPUMaxName       = "cpu.max"
+	CPUMaxBurstName  = "cpu.max.burst"
 	CPUWeightName    = "cpu.weight"
+	CPUIdleName      = "cpu.idle"
 
 	CPUSetCPUSName          = "cpuset.cpus"
 	CPUSetCPUSEffectiveName = "cpuset.cpus.effective"
@@ -158,6 +161,7 @@ const (
 	MemoryPriorityName         = "memory.priority"
 	MemoryUsePriorityOomName   = "memory.use_priority_oom"
 	MemoryOomGroupName         = "memory.oom.group"
+	MemoryIdlePageStatsName    = "memory.idle_page_stats"
 
 	BlkioTRIopsName   = "blkio.throttle.read_iops_device"
 	BlkioTRBpsName    = "blkio.throttle.read_bps_device"
@@ -165,15 +169,18 @@ const (
 	BlkioTWBpsName    = "blkio.throttle.write_bps_device"
 	BlkioIOWeightName = "blkio.cost.weight"
 	BlkioIOQoSName    = "blkio.cost.qos"
+	BlkioIOModelName  = "blkio.cost.model"
 )
 
 var (
 	NaturalInt64Validator = &RangeValidator{min: 0, max: math.MaxInt64}
 
-	CPUSharesValidator                      = &RangeValidator{min: CPUSharesMinValue, max: math.MaxInt64}
+	CPUSharesValidator                      = &RangeValidator{min: CPUSharesMinValue, max: CPUSharesMaxValue}
 	CPUBurstValidator                       = &RangeValidator{min: 0, max: 100 * 10 * 100000}
 	CPUBvtWarpNsValidator                   = &RangeValidator{min: -1, max: 2}
 	CPUWeightValidator                      = &RangeValidator{min: CPUWeightMinValue, max: CPUWeightMaxValue}
+	CPUMaxBurstValidator                    = &RangeValidator{min: 0, max: math.MaxInt64}
+	CPUIdleValidator                        = &RangeValidator{min: 0, max: 1}
 	MemoryWmarkRatioValidator               = &RangeValidator{min: 0, max: 100}
 	MemoryPriorityValidator                 = &RangeValidator{min: 0, max: 12}
 	MemoryOomGroupValidator                 = &RangeValidator{min: 0, max: 1}
@@ -186,6 +193,7 @@ var (
 	BlkioTWBpsValidator                     = &BlkIORangeValidator{min: 0, max: math.MaxInt64, resource: BlkioTWBpsName}
 	BlkioIOWeightValidator                  = &BlkIORangeValidator{min: 1, max: 100, resource: BlkioIOWeightName}
 	BlkioIOQoSValidator                     = &BlkIORangeValidator{min: 0, max: math.MaxInt64, resource: BlkioIOQoSName}
+	BlkioIOModelValidator                   = &BlkIORangeValidator{min: 1, max: math.MaxInt64, resource: BlkioIOModelName}
 
 	CPUSetCPUSValidator = &CPUSetStrValidator{}
 )
@@ -200,6 +208,7 @@ var (
 	CPUCFSPeriod = DefaultFactory.New(CPUCFSPeriodName, CgroupCPUDir)
 	CPUBurst     = DefaultFactory.New(CPUBurstName, CgroupCPUDir).WithValidator(CPUBurstValidator).WithCheckSupported(SupportedIfFileExists)
 	CPUBVTWarpNs = DefaultFactory.New(CPUBVTWarpNsName, CgroupCPUDir).WithValidator(CPUBvtWarpNsValidator).WithCheckSupported(SupportedIfFileExists)
+	CPUIdle      = DefaultFactory.New(CPUIdleName, CgroupCPUDir).WithValidator(CPUIdleValidator).WithCheckSupported(SupportedIfFileExistsInKubepods).WithCheckOnce(true)
 	CPUTasks     = DefaultFactory.New(CPUTasksName, CgroupCPUDir)
 	CPUProcs     = DefaultFactory.New(CPUProcsName, CgroupCPUDir)
 
@@ -224,6 +233,7 @@ var (
 	MemoryPriority         = DefaultFactory.New(MemoryPriorityName, CgroupMemDir).WithValidator(MemoryPriorityValidator).WithCheckSupported(SupportedIfFileExistsInKubepods).WithCheckOnce(true)
 	MemoryUsePriorityOom   = DefaultFactory.New(MemoryUsePriorityOomName, CgroupMemDir).WithValidator(MemoryUsePriorityOomValidator).WithCheckSupported(SupportedIfFileExistsInKubepods).WithCheckOnce(true)
 	MemoryOomGroup         = DefaultFactory.New(MemoryOomGroupName, CgroupMemDir).WithValidator(MemoryOomGroupValidator).WithCheckSupported(SupportedIfFileExistsInKubepods).WithCheckOnce(true)
+	MemoryIdlePageStats    = DefaultFactory.New(MemoryIdlePageStatsName, CgroupMemDir).WithCheckSupported(SupportedIfFileExistsInKubepods).WithCheckOnce(true)
 
 	BlkioReadIops  = DefaultFactory.New(BlkioTRIopsName, CgroupBlkioDir).WithValidator(BlkioTRIopsValidator).WithCheckSupported(SupportedIfFileExistsInKubepods).WithCheckOnce(true)
 	BlkioReadBps   = DefaultFactory.New(BlkioTRBpsName, CgroupBlkioDir).WithValidator(BlkioTRBpsValidator).WithCheckSupported(SupportedIfFileExistsInKubepods).WithCheckOnce(true)
@@ -231,6 +241,7 @@ var (
 	BlkioWriteBps  = DefaultFactory.New(BlkioTWBpsName, CgroupBlkioDir).WithValidator(BlkioTWBpsValidator).WithCheckSupported(SupportedIfFileExistsInKubepods).WithCheckOnce(true)
 	BlkioIOWeight  = DefaultFactory.New(BlkioIOWeightName, CgroupBlkioDir).WithValidator(BlkioIOWeightValidator).WithCheckSupported(SupportedIfFileExistsInKubepods).WithCheckOnce(true)
 	BlkioIOQoS     = DefaultFactory.New(BlkioIOQoSName, CgroupBlkioDir).WithValidator(BlkioIOQoSValidator).WithSupported(SupportedIfFileExistsInRootCgroup(BlkioIOQoSName, CgroupBlkioDir))
+	BlkioIOModel   = DefaultFactory.New(BlkioIOModelName, CgroupBlkioDir).WithValidator(BlkioIOModelValidator).WithSupported(SupportedIfFileExistsInRootCgroup(BlkioIOModelName, CgroupBlkioDir))
 
 	knownCgroupResources = []Resource{
 		CPUStat,
@@ -240,6 +251,7 @@ var (
 		CPUBurst,
 		CPUTasks,
 		CPUBVTWarpNs,
+		CPUIdle,
 		CPUSet,
 		CPUAcctStat,
 		CPUAcctUsage,
@@ -260,12 +272,14 @@ var (
 		MemoryPriority,
 		MemoryUsePriorityOom,
 		MemoryOomGroup,
+		MemoryIdlePageStats,
 		BlkioReadIops,
 		BlkioReadBps,
 		BlkioWriteIops,
 		BlkioWriteBps,
 		BlkioIOWeight,
 		BlkioIOQoS,
+		BlkioIOModel,
 	}
 
 	CPUCFSQuotaV2  = DefaultFactory.NewV2(CPUCFSQuotaName, CPUMaxName)
@@ -274,6 +288,9 @@ var (
 	CPUStatV2      = DefaultFactory.NewV2(CPUStatName, CPUStatName)
 	CPUAcctStatV2  = DefaultFactory.NewV2(CPUAcctStatName, CPUStatName)
 	CPUAcctUsageV2 = DefaultFactory.NewV2(CPUAcctUsageName, CPUStatName)
+	CPUBurstV2     = DefaultFactory.NewV2(CPUBurstName, CPUMaxBurstName).WithValidator(CPUMaxBurstValidator).WithCheckSupported(SupportedIfFileExistsInKubepods).WithCheckOnce(true)
+	CPUBVTWarpNsV2 = DefaultFactory.NewV2(CPUBVTWarpNsName, CPUBVTWarpNsName).WithValidator(CPUBvtWarpNsValidator).WithCheckSupported(SupportedIfFileExists)
+	CPUIdleV2      = DefaultFactory.NewV2(CPUIdleName, CPUIdleName).WithValidator(CPUIdleValidator).WithCheckSupported(SupportedIfFileExistsInKubepods).WithCheckOnce(true)
 
 	CPUAcctCPUPressureV2    = DefaultFactory.NewV2(CPUAcctCPUPressureName, CPUAcctCPUPressureName).WithCheckSupported(SupportedIfFileExistsInKubepods).WithCheckOnce(true)
 	CPUAcctMemoryPressureV2 = DefaultFactory.NewV2(CPUAcctMemoryPressureName, CPUAcctMemoryPressureName).WithCheckSupported(SupportedIfFileExistsInKubepods).WithCheckOnce(true)
@@ -304,6 +321,9 @@ var (
 		CPUStatV2,
 		CPUAcctStatV2,
 		CPUAcctUsageV2,
+		CPUBurstV2,
+		CPUBVTWarpNsV2,
+		CPUIdleV2,
 		CPUAcctCPUPressureV2,
 		CPUAcctMemoryPressureV2,
 		CPUAcctIOPressureV2,
@@ -324,8 +344,7 @@ var (
 		MemoryPriorityV2,
 		MemoryUsePriorityOomV2,
 		MemoryOomGroupV2,
-		BlkioIOWeight,
-		BlkioIOQoS,
+		// TODO: register BlkioIOWeight, BlkioIOQoS and BlkioIOModel
 	}
 )
 
@@ -356,18 +375,19 @@ func (c *CgroupResource) Path(parentDir string) string {
 }
 
 func (c *CgroupResource) IsSupported(parentDir string) (bool, string) {
-	if c.Supported == nil {
-		if c.CheckSupported == nil {
-			return false, "unknown support status"
-		}
-		isSupported, msg := c.CheckSupported(c, parentDir)
-		if c.CheckOnce {
-			c.Supported = &isSupported
-			c.SupportMsg = msg
-		}
-		return isSupported, msg
+	if c.Supported != nil {
+		return *c.Supported, c.SupportMsg
 	}
-	return *c.Supported, c.SupportMsg
+	if c.CheckSupported == nil {
+		return false, "unknown support status"
+	}
+	isSupported, msg := c.CheckSupported(c, parentDir)
+	if c.CheckOnce {
+		c.Supported = &isSupported
+		c.SupportMsg = msg
+	}
+
+	return isSupported, msg
 }
 
 func (c *CgroupResource) IsValid(v string) (bool, string) {

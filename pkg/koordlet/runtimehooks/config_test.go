@@ -19,6 +19,7 @@ package runtimehooks
 import (
 	"flag"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 
@@ -34,7 +35,9 @@ func Test_NewDefaultConfig(t *testing.T) {
 		RuntimeHookConfigFilePath:       system.Conf.RuntimeHooksConfigDir,
 		RuntimeHookHostEndpoint:         "/var/run/koordlet/koordlet.sock",
 		RuntimeHookDisableStages:        []string{},
-		FeatureGates:                    map[string]bool{},
+		RuntimeHooksNRI:                 true,
+		RuntimeHooksNRISocketPath:       "nri/nri.sock",
+		RuntimeHookReconcileInterval:    10 * time.Second,
 	}
 	defaultConfig := NewDefaultConfig()
 	assert.Equal(t, expectConfig, defaultConfig)

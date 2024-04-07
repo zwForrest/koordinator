@@ -20,8 +20,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 
@@ -63,17 +61,18 @@ func GetContainerCgroupPerfPath(podParentDir string, c *corev1.ContainerStatus) 
 
 func GetContainerBaseCFSQuota(container *corev1.Container) int64 {
 	cpuMilliLimit := util.GetContainerMilliCPULimit(container)
-	if cpuMilliLimit <= 0 {
-		return -1
-	} else {
-		return cpuMilliLimit * system.CFSBasePeriodValue / 1000
-	}
+	return system.MilliCPUToQuota(cpuMilliLimit)
 }
 
 // ParseContainerID parse container ID from the container base path.
 // e.g. 7712555c_ce62_454a_9e18_9ff0217b8941 from docker-7712555c_ce62_454a_9e18_9ff0217b8941.scope
 func ParseContainerID(basename string) (string, error) {
 	return system.CgroupPathFormatter.ContainerIDParser(basename)
+}
+
+func IsValidContainerCgroupDir(containerParentDir string) bool {
+	containerID, err := system.CgroupPathFormatter.ContainerIDParser(filepath.Base(containerParentDir))
+	return err == nil && len(containerID) >= 0
 }
 
 func GetPIDsInContainer(podParentDir string, c *corev1.ContainerStatus) ([]uint32, error) {
@@ -85,15 +84,6 @@ func GetPIDsInContainer(podParentDir string, c *corev1.ContainerStatus) ([]uint3
 	if err != nil {
 		return nil, err
 	}
-	pidStrs := strings.Fields(strings.TrimSpace(string(rawContent)))
-	pids := make([]uint32, len(pidStrs))
 
-	for i := 0; i < len(pids); i++ {
-		p, err := strconv.ParseUint(pidStrs[i], 10, 32)
-		if err != nil {
-			return nil, err
-		}
-		pids[i] = uint32(p)
-	}
-	return pids, nil
+	return system.ParseCgroupProcs(string(rawContent))
 }

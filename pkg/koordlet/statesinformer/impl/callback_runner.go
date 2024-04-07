@@ -42,17 +42,19 @@ func NewCallbackRunner() *callbackRunner {
 		statesinformer.RegisterTypeNodeSLOSpec:  make(chan UpdateCbCtx, 1),
 		statesinformer.RegisterTypeAllPods:      make(chan UpdateCbCtx, 1),
 		statesinformer.RegisterTypeNodeTopology: make(chan UpdateCbCtx, 1),
+		statesinformer.RegisterTypeNodeMetadata: make(chan UpdateCbCtx, 1),
 	}
 	c.stateUpdateCallbacks = map[statesinformer.RegisterType][]updateCallback{
 		statesinformer.RegisterTypeNodeSLOSpec:  {},
 		statesinformer.RegisterTypeAllPods:      {},
 		statesinformer.RegisterTypeNodeTopology: {},
+		statesinformer.RegisterTypeNodeMetadata: {},
 	}
 	return c
 }
 
-func (c *callbackRunner) Setup(s StatesInformer) {
-	c.statesInformer = s
+func (s *callbackRunner) Setup(i StatesInformer) {
+	s.statesInformer = i
 }
 
 func (s *callbackRunner) RegisterCallbacks(rType statesinformer.RegisterType, name, description string, callbackFn statesinformer.UpdateCbFn) {
@@ -93,10 +95,16 @@ func (s *callbackRunner) runCallbacks(objType statesinformer.RegisterType, obj i
 		klog.Errorf("states informer callbacks type %v not exist", objType.String())
 		return
 	}
-	pods := s.statesInformer.GetAllPods()
+	callbackTarget := &statesinformer.CallbackTarget{
+		Pods: s.statesInformer.GetAllPods(),
+	}
+	if nodeSLO := s.statesInformer.GetNodeSLO(); nodeSLO != nil {
+		callbackTarget.HostApplications = nodeSLO.Spec.HostApplications
+	}
 	for _, c := range callbacks {
-		klog.V(5).Infof("start running callback function %v for type %v", c.name, objType.String())
-		c.fn(objType, obj, pods)
+		klog.V(5).Infof("start running callback function %v for type %v, pod num %v, host app num %v",
+			c.name, objType.String(), len(callbackTarget.Pods), len(callbackTarget.HostApplications))
+		c.fn(objType, obj, callbackTarget)
 	}
 }
 
@@ -134,6 +142,8 @@ func (s *callbackRunner) getObjByType(objType statesinformer.RegisterType, cbCtx
 		return &struct{}{}
 	case statesinformer.RegisterTypeNodeTopology:
 		return s.statesInformer.GetNodeTopo()
+	case statesinformer.RegisterTypeNodeMetadata:
+		return s.statesInformer.GetNode()
 	}
 	return nil
 }

@@ -42,7 +42,6 @@ import (
 	kubefake "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
-	resourcehelper "k8s.io/kubernetes/pkg/api/v1/resource"
 	schedulerconfig "k8s.io/kubernetes/pkg/scheduler/apis/config"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/defaultbinder"
@@ -60,26 +59,13 @@ import (
 	koordinatorinformers "github.com/koordinator-sh/koordinator/pkg/client/informers/externalversions"
 	"github.com/koordinator-sh/koordinator/pkg/scheduler/apis/config"
 	"github.com/koordinator-sh/koordinator/pkg/scheduler/apis/config/v1beta2"
+	"github.com/koordinator-sh/koordinator/pkg/scheduler/frameworkext"
 	"github.com/koordinator-sh/koordinator/pkg/scheduler/plugins/elasticquota/core"
 )
 
 type ElasticQuotaSetAndHandle struct {
-	framework.Handle
+	frameworkext.ExtendedHandle
 	pgclientset.Interface
-}
-
-func ElasticQuotaPluginFactoryProxy(clientSet pgclientset.Interface, factoryFn runtime.PluginFactory) runtime.PluginFactory {
-	return func(args apiruntime.Object, handle framework.Handle) (framework.Plugin, error) {
-		return factoryFn(args, ElasticQuotaSetAndHandle{Handle: handle, Interface: clientSet})
-	}
-}
-
-func ElasticQuotaPluginFactoryProxyWithPlugin(clientSet pgclientset.Interface, factoryFn runtime.PluginFactory, plugin *framework.Plugin) runtime.PluginFactory {
-	return func(args apiruntime.Object, handle framework.Handle) (framework.Plugin, error) {
-		var err error
-		*plugin, err = factoryFn(args, ElasticQuotaSetAndHandle{Handle: handle, Interface: clientSet})
-		return *plugin, err
-	}
 }
 
 func mockPodsList(w http.ResponseWriter, r *http.Request) {
@@ -142,9 +128,18 @@ func newPluginTestSuit(t *testing.T, nodes []*corev1.Node) *pluginTestSuit {
 
 	koordClientSet := fake.NewSimpleClientset()
 	koordSharedInformerFactory := koordinatorinformers.NewSharedInformerFactory(koordClientSet, 0)
-
+	extenderFactory, err := frameworkext.NewFrameworkExtenderFactory(
+		frameworkext.WithKoordinatorClientSet(koordClientSet),
+		frameworkext.WithKoordinatorSharedInformerFactory(koordSharedInformerFactory),
+	)
+	assert.Nil(t, err)
 	pgClientSet := pgfake.NewSimpleClientset()
-	proxyNew := ElasticQuotaPluginFactoryProxy(pgClientSet, New)
+	proxyNew := frameworkext.PluginFactoryProxy(extenderFactory, func(configuration apiruntime.Object, f framework.Handle) (framework.Plugin, error) {
+		return New(configuration, &ElasticQuotaSetAndHandle{
+			ExtendedHandle: f.(frameworkext.ExtendedHandle),
+			Interface:      pgClientSet,
+		})
+	})
 
 	registeredPlugins := []schedulertesting.RegisterPluginFunc{
 		func(reg *runtime.Registry, profile *schedulerconfig.KubeSchedulerProfile) {
@@ -214,8 +209,18 @@ func newPluginTestSuitWithPod(t *testing.T, nodes []*corev1.Node, pods []*corev1
 	koordSharedInformerFactory := koordinatorinformers.NewSharedInformerFactory(koordClientSet, 0)
 
 	pgClientSet := pgfake.NewSimpleClientset()
-	var plugin framework.Plugin
-	proxyNew := ElasticQuotaPluginFactoryProxyWithPlugin(pgClientSet, New, &plugin)
+
+	extenderFactory, err := frameworkext.NewFrameworkExtenderFactory(
+		frameworkext.WithKoordinatorClientSet(koordClientSet),
+		frameworkext.WithKoordinatorSharedInformerFactory(koordSharedInformerFactory),
+	)
+	assert.Nil(t, err)
+	proxyNew := frameworkext.PluginFactoryProxy(extenderFactory, func(configuration apiruntime.Object, f framework.Handle) (framework.Plugin, error) {
+		return New(configuration, &ElasticQuotaSetAndHandle{
+			ExtendedHandle: f.(frameworkext.ExtendedHandle),
+			Interface:      pgClientSet,
+		})
+	})
 
 	registeredPlugins := []schedulertesting.RegisterPluginFunc{
 		func(reg *runtime.Registry, profile *schedulerconfig.KubeSchedulerProfile) {
@@ -267,7 +272,6 @@ func newPluginTestSuitWithPod(t *testing.T, nodes []*corev1.Node, pods []*corev1
 		elasticQuotaArgs:                 &elasticQuotaArgs,
 		client:                           pgClientSet,
 		Framework:                        fh,
-		plugin:                           plugin,
 	}
 }
 
@@ -334,7 +338,6 @@ type pluginTestSuit struct {
 	proxyNew                         runtime.PluginFactory
 	elasticQuotaArgs                 *config.ElasticQuotaArgs
 	client                           *pgfake.Clientset
-	plugin                           framework.Plugin
 }
 
 func TestNew(t *testing.T) {
@@ -345,213 +348,15 @@ func TestNew(t *testing.T) {
 	assert.Equal(t, Name, p.Name())
 }
 
-func TestPlugin_OnNodeAdd(t *testing.T) {
-	tests := []struct {
-		name     string
-		nodes    []*corev1.Node
-		totalRes corev1.ResourceList
-	}{
-		{
-			name:     "add invalid node",
-			nodes:    []*corev1.Node{},
-			totalRes: corev1.ResourceList{},
-		},
-		{
-			name: "add invalid node 2",
-			nodes: []*corev1.Node{
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						DeletionTimestamp: &metav1.Time{Time: time.Now()},
-					},
-					Status: corev1.NodeStatus{
-						Allocatable: createResourceList(100, 1000),
-					},
-				},
-			},
-			totalRes: corev1.ResourceList{},
-		},
-		{
-			name: "add normal node",
-			nodes: []*corev1.Node{
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "node1",
-					},
-					Status: corev1.NodeStatus{
-						Allocatable: createResourceList(100, 1000),
-					},
-				},
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "node2",
-					},
-					Status: corev1.NodeStatus{
-						Allocatable: createResourceList(100, 1000),
-					},
-				},
-			},
-			totalRes: createResourceList(200, 2000),
-		},
-		{
-			name: "add same node twice",
-			nodes: []*corev1.Node{
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "node1",
-					},
-					Status: corev1.NodeStatus{
-						Allocatable: createResourceList(100, 1000),
-					},
-				},
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "node1",
-					},
-					Status: corev1.NodeStatus{
-						Allocatable: createResourceList(100, 1000),
-					},
-				},
-			},
-			totalRes: createResourceList(100, 1000),
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			suit := newPluginTestSuit(t, nil)
-			p, err := suit.proxyNew(suit.elasticQuotaArgs, suit.Handle)
-			assert.NotNil(t, p)
-			assert.Nil(t, err)
-			eQP := p.(*Plugin)
-			for _, node := range tt.nodes {
-				eQP.OnNodeAdd(node)
-			}
-			gqm := eQP.groupQuotaManager
-			assert.NotNil(t, gqm)
-			assert.Equal(t, tt.totalRes, gqm.GetClusterTotalResource())
-		})
-	}
-}
-
-func TestPlugin_OnNodeDelete(t *testing.T) {
-	suit := newPluginTestSuit(t, nil)
-	p, err := suit.proxyNew(suit.elasticQuotaArgs, suit.Handle)
-	assert.NotNil(t, p)
-	assert.Nil(t, err)
-	eQP := p.(*Plugin)
-	gqp := eQP.groupQuotaManager
-	gqp.UpdateClusterTotalResource(createResourceList(400, 4000))
-	assert.NotNil(t, gqp)
-	nodes := []*corev1.Node{defaultCreateNode("1"), defaultCreateNode("2"), defaultCreateNode("3")}
-	for _, node := range nodes {
-		eQP.OnNodeAdd(node)
-	}
-	for i, node := range nodes {
-		eQP.OnNodeDelete(node)
-		assert.Equal(t, gqp.GetClusterTotalResource(), createResourceList(600-int64(i)*100, 6000-int64(i)*1000))
-	}
-}
-
-func TestPlugin_OnNodeUpdate(t *testing.T) {
-	nodes := []*corev1.Node{defaultCreateNodeWithResourceVersion("1"), defaultCreateNodeWithResourceVersion("2"),
-		defaultCreateNodeWithResourceVersion("3")}
-	tests := []struct {
-		name     string
-		nodes    []*corev1.Node
-		totalRes corev1.ResourceList
-	}{
-		{
-			name:     "update invalid node",
-			nodes:    []*corev1.Node{},
-			totalRes: createResourceList(300, 3000),
-		},
-		{
-			name: "increase node resource",
-			nodes: []*corev1.Node{
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "1",
-					},
-					Status: corev1.NodeStatus{
-						Allocatable: createResourceList(200, 2000),
-					},
-				},
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "2",
-					},
-					Status: corev1.NodeStatus{
-						Allocatable: createResourceList(200, 2000),
-					},
-				},
-			},
-			totalRes: createResourceList(500, 5000),
-		},
-		{
-			name: "decrease node resource",
-			nodes: []*corev1.Node{
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "1",
-					},
-					Status: corev1.NodeStatus{
-						Allocatable: createResourceList(50, 500),
-					},
-				},
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "2",
-					},
-					Status: corev1.NodeStatus{
-						Allocatable: createResourceList(50, 500),
-					},
-				},
-			},
-			totalRes: createResourceList(200, 2000),
-		},
-		{
-			name: "node not exist",
-			nodes: []*corev1.Node{
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "4",
-					},
-					Status: corev1.NodeStatus{
-						Allocatable: createResourceList(50, 500),
-					},
-				},
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "5",
-					},
-					Status: corev1.NodeStatus{
-						Allocatable: createResourceList(50, 500),
-					},
-				},
-			},
-			totalRes: createResourceList(300, 3000),
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			suit := newPluginTestSuit(t, nil)
-			p, _ := suit.proxyNew(suit.elasticQuotaArgs, suit.Handle)
-			plugin := p.(*Plugin)
-			for _, node := range nodes {
-				plugin.OnNodeAdd(node)
-			}
-			for i, node := range tt.nodes {
-				plugin.OnNodeUpdate(nodes[i], node)
-			}
-			assert.Equal(t, p.(*Plugin).groupQuotaManager.GetClusterTotalResource(), tt.totalRes)
-		})
-	}
-}
-
-func defaultCreateNodeWithResourceVersion(nodeName string) *corev1.Node {
+func defaultCreateNodeWithLabels(nodeName string, labels map[string]string) *corev1.Node {
 	node := defaultCreateNode(nodeName)
 	node.ResourceVersion = "3"
+	if node.Labels == nil {
+		node.Labels = make(map[string]string)
+	}
+	for k, v := range labels {
+		node.Labels[k] = v
+	}
 	return node
 }
 
@@ -577,7 +382,8 @@ func createResourceList(cpu, mem int64) corev1.ResourceList {
 
 func TestPlugin_OnQuotaAdd(t *testing.T) {
 	suit := newPluginTestSuit(t, nil)
-	p, _ := suit.proxyNew(suit.elasticQuotaArgs, suit.Handle)
+	p, err := suit.proxyNew(suit.elasticQuotaArgs, suit.Handle)
+	assert.Nil(t, err)
 	pl := p.(*Plugin)
 	pl.groupQuotaManager.UpdateClusterTotalResource(createResourceList(501952056, 0))
 	gqm := pl.groupQuotaManager
@@ -589,23 +395,42 @@ func TestPlugin_OnQuotaAdd(t *testing.T) {
 	assert.Nil(t, gqm.GetQuotaInfoByName("2"))
 }
 
+func (p *pluginTestSuit) AddQuotaWithTreeID(name string, parentName string, maxCpu, maxMem int64,
+	minCpu, minMem int64, scaleCpu, scaleMem int64, isParGroup bool, namespace, treeID string) *v1alpha1.ElasticQuota {
+	quota := CreateQuota2(name, parentName, maxCpu, maxMem, minCpu, minMem, scaleCpu, scaleMem, isParGroup, treeID)
+	p.client.SchedulingV1alpha1().ElasticQuotas(namespace).Create(context.TODO(), quota, metav1.CreateOptions{})
+	time.Sleep(100 * time.Millisecond)
+	return quota
+}
+
 func (p *pluginTestSuit) AddQuota(name string, parentName string, maxCpu, maxMem int64,
 	minCpu, minMem int64, scaleCpu, scaleMem int64, isParGroup bool, namespace string) *v1alpha1.ElasticQuota {
-	quota := CreateQuota2(name, parentName, maxCpu, maxMem, minCpu, minMem, scaleCpu, scaleMem, isParGroup)
+	quota := CreateQuota2(name, parentName, maxCpu, maxMem, minCpu, minMem, scaleCpu, scaleMem, isParGroup, "")
 	p.client.SchedulingV1alpha1().ElasticQuotas(namespace).Create(context.TODO(), quota, metav1.CreateOptions{})
 	time.Sleep(100 * time.Millisecond)
 	return quota
 }
 
 func (g *Plugin) addQuota(name string, parentName string, maxCpu, maxMem int64,
-	minCpu, minMem int64, scaleCpu, scaleMem int64, isParGroup bool, namespace string) *v1alpha1.ElasticQuota {
-	quota := CreateQuota2(name, parentName, maxCpu, maxMem, minCpu, minMem, scaleCpu, scaleMem, isParGroup)
+	minCpu, minMem int64, scaleCpu, scaleMem int64, isParGroup bool, namespace, tree string) *v1alpha1.ElasticQuota {
+	quota := CreateQuota2(name, parentName, maxCpu, maxMem, minCpu, minMem, scaleCpu, scaleMem, isParGroup, tree)
+	g.OnQuotaAdd(quota)
+	return quota
+}
+
+func (g *Plugin) addRootQuota(name string, parentName string, maxCpu, maxMem int64,
+	minCpu, minMem int64, scaleCpu, scaleMem int64, isParGroup bool, namespace, tree string) *v1alpha1.ElasticQuota {
+	quota := CreateQuota2(name, parentName, maxCpu, maxMem, minCpu, minMem, scaleCpu, scaleMem, isParGroup, tree)
+
+	quota.Labels[extension.LabelQuotaIsRoot] = "true"
+	quota.Annotations[extension.AnnotationTotalResource] = fmt.Sprintf("{\"cpu\":%v, \"memory\":\"%v\"}", minCpu, minMem)
+
 	g.OnQuotaAdd(quota)
 	return quota
 }
 
 func CreateQuota2(name string, parentName string, maxCpu, maxMem int64, minCpu, minMem int64,
-	scaleCpu, scaleMem int64, isParGroup bool) *v1alpha1.ElasticQuota {
+	scaleCpu, scaleMem int64, isParGroup bool, treeID string) *v1alpha1.ElasticQuota {
 	quota := &v1alpha1.ElasticQuota{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        name,
@@ -624,24 +449,29 @@ func CreateQuota2(name string, parentName string, maxCpu, maxMem int64, minCpu, 
 	} else {
 		quota.Labels[extension.LabelQuotaIsParent] = "false"
 	}
+	if treeID != "" {
+		quota.Labels[extension.LabelQuotaTreeID] = treeID
+	}
+
 	return quota
 }
 
 func TestPlugin_OnQuotaUpdate(t *testing.T) {
 	suit := newPluginTestSuit(t, nil)
-	p, _ := suit.proxyNew(suit.elasticQuotaArgs, suit.Handle)
+	p, err := suit.proxyNew(suit.elasticQuotaArgs, suit.Handle)
+	assert.Nil(t, err)
 	plugin := p.(*Plugin)
 	gqm := plugin.groupQuotaManager
-	// test2 Max[96, 160]  Min[50,80] request[20,40]
+	// test2 Max[96, 160]  Min[100,160] request[20,40]
 	//   `-- test2-a Max[96, 160]  Min[50,80] request[20,40]
-	// test1 Max[96, 160]  Min[50,80] request[60,100]
+	// test1 Max[96, 160]  Min[100,160] request[60,100]
 	//   `-- test1-a Max[96, 160]  Min[50,80] request[60,100]
 	//         `-- a-123 Max[96, 160]  Min[50,80] request[60,100]
-	plugin.addQuota("test1", extension.RootQuotaName, 96, 160, 100, 160, 96, 160, true, "")
-	plugin.addQuota("test1-a", "test1", 96, 160, 50, 80, 96, 160, true, "")
-	changeQuota := plugin.addQuota("a-123", "test1-a", 96, 160, 50, 80, 96, 160, false, "")
-	plugin.addQuota("test2", extension.RootQuotaName, 96, 160, 100, 160, 96, 160, true, "")
-	mmQuota := plugin.addQuota("test2-a", "test2", 96, 160, 50, 80, 96, 160, false, "")
+	plugin.addQuota("test1", extension.RootQuotaName, 96, 160, 100, 160, 96, 160, true, "", "")
+	plugin.addQuota("test1-a", "test1", 96, 160, 50, 80, 96, 160, true, "", "")
+	changeQuota := plugin.addQuota("a-123", "test1-a", 96, 160, 50, 80, 96, 160, false, "", "")
+	plugin.addQuota("test2", extension.RootQuotaName, 96, 160, 100, 160, 96, 160, true, "", "")
+	mmQuota := plugin.addQuota("test2-a", "test2", 96, 160, 50, 80, 96, 160, false, "", "")
 	gqm.UpdateClusterTotalResource(createResourceList(96, 160))
 	request := createResourceList(60, 100)
 	pod := makePod2("pod", request)
@@ -709,8 +539,6 @@ func TestPlugin_OnQuotaUpdate(t *testing.T) {
 	assert.Equal(t, createResourceList(80, 140), quotaInfo.GetRequest())
 	assert.Equal(t, createResourceList(80, 140), quotaInfo.GetUsed())
 	assert.Equal(t, createResourceList(80, 140), quotaInfo.GetRuntime())
-	changeQuota.Name = extension.RootQuotaName
-	plugin.OnQuotaUpdate(oldQuota, changeQuota)
 	changeQuota.DeletionTimestamp = &metav1.Time{Time: time.Now()}
 	plugin.OnQuotaUpdate(oldQuota, changeQuota)
 	changeQuota.ResourceVersion = "3"
@@ -726,10 +554,12 @@ func TestPlugin_OnQuotaUpdate(t *testing.T) {
 
 func TestPlugin_OnPodAdd_Update_Delete(t *testing.T) {
 	suit := newPluginTestSuitWithPod(t, nil, nil)
-	plugin := suit.plugin.(*Plugin)
+	p, err := suit.proxyNew(suit.elasticQuotaArgs, suit.Handle)
+	assert.Nil(t, err)
+	plugin := p.(*Plugin)
 	gqm := plugin.groupQuotaManager
-	plugin.addQuota("test1", extension.RootQuotaName, 96, 160, 100, 160, 96, 160, true, "")
-	plugin.addQuota("test2", extension.RootQuotaName, 96, 160, 100, 160, 96, 160, true, "")
+	plugin.addQuota("test1", extension.RootQuotaName, 96, 160, 100, 160, 96, 160, true, "", "")
+	plugin.addQuota("test2", extension.RootQuotaName, 96, 160, 100, 160, 96, 160, true, "", "")
 	pods := []*corev1.Pod{
 		defaultCreatePodWithQuotaName("1", "test1", 10, 10, 10),
 		defaultCreatePodWithQuotaName("2", "test1", 10, 10, 10),
@@ -772,11 +602,12 @@ func setLoglevel(logLevel string) {
 
 func TestPlugin_PreFilter(t *testing.T) {
 	test := []struct {
-		name           string
-		pod            *corev1.Pod
-		quotaInfo      *core.QuotaInfo
-		expectedStatus *framework.Status
-		checkParent    bool
+		name                string
+		pod                 *corev1.Pod
+		quotaInfo           *core.QuotaInfo
+		expectedStatus      *framework.Status
+		checkParent         bool
+		disableRuntimeQuota bool
 	}{
 		{
 			name: "default",
@@ -833,12 +664,28 @@ func TestPlugin_PreFilter(t *testing.T) {
 			},
 			expectedStatus: framework.NewStatus(framework.Success, ""),
 		},
+		{
+			name: "runtime not enough, but disable runtime",
+			pod: MakePod("t1-ns1", "pod1").Container(
+				MakeResourceList().CPU(1).Mem(3).GPU(1).Obj()).Obj(),
+			quotaInfo: &core.QuotaInfo{
+				Name: extension.DefaultQuotaName,
+				CalculateInfo: core.QuotaCalculateInfo{
+					Max:     MakeResourceList().CPU(1).Mem(3).Obj(),
+					Runtime: MakeResourceList().CPU(1).Mem(2).Obj(),
+				},
+			},
+			disableRuntimeQuota: true,
+			expectedStatus:      framework.NewStatus(framework.Success, ""),
+		},
 	}
 	for _, tt := range test {
 		t.Run(tt.name, func(t *testing.T) {
 			suit := newPluginTestSuit(t, nil)
-			p, _ := suit.proxyNew(suit.elasticQuotaArgs, suit.Handle)
+			p, err := suit.proxyNew(suit.elasticQuotaArgs, suit.Handle)
+			assert.Nil(t, err)
 			gp := p.(*Plugin)
+			gp.pluginArgs.EnableRuntimeQuota = !tt.disableRuntimeQuota
 			qi := gp.groupQuotaManager.GetQuotaInfoByName(tt.quotaInfo.Name)
 			qi.Lock()
 			qi.CalculateInfo.Runtime = tt.quotaInfo.CalculateInfo.Runtime.DeepCopy()
@@ -898,9 +745,10 @@ func TestPlugin_PreFilter_CheckParent(t *testing.T) {
 	for _, tt := range test {
 		t.Run(tt.name, func(t *testing.T) {
 			suit := newPluginTestSuit(t, nil)
-			p, _ := suit.proxyNew(suit.elasticQuotaArgs, suit.Handle)
+			p, err := suit.proxyNew(suit.elasticQuotaArgs, suit.Handle)
+			assert.Nil(t, err)
 			gp := p.(*Plugin)
-			gp.pluginArgs.EnableCheckParentQuota = pointer.Bool(true)
+			gp.pluginArgs.EnableCheckParentQuota = true
 			gp.OnQuotaAdd(tt.parQuotaInfo)
 			gp.OnQuotaAdd(tt.quotaInfo)
 			qi := gp.groupQuotaManager.GetQuotaInfoByName(tt.quotaInfo.Name)
@@ -911,9 +759,117 @@ func TestPlugin_PreFilter_CheckParent(t *testing.T) {
 			qi1.Lock()
 			qi1.CalculateInfo.Runtime = tt.parentRuntime.DeepCopy()
 			qi1.UnLock()
-			podRequests, _ := resourcehelper.PodRequestsAndLimits(tt.pod)
+			podRequests, _ := core.PodRequestsAndLimits(tt.pod)
 			status := *gp.checkQuotaRecursive(tt.quotaInfo.Name, []string{tt.quotaInfo.Name}, podRequests)
 			assert.Equal(t, tt.expectedStatus, status)
+		})
+	}
+}
+
+func TestPlugin_Prefilter_QuotaNonPreempt(t *testing.T) {
+	test := []struct {
+		name           string
+		pod            *corev1.Pod
+		initPods       []*corev1.Pod
+		quotaInfos     []*v1alpha1.ElasticQuota
+		totalResource  corev1.ResourceList
+		expectedStatus *framework.Status
+	}{
+		{
+			name: "default",
+			pod:  defaultCreatePodWithQuotaAndNonPreemptible("4", "test1", 1, 2, 2, true),
+			initPods: []*corev1.Pod{
+				defaultCreatePodWithQuotaAndNonPreemptible("1", "test1", 10, 2, 1, false),
+				defaultCreatePodWithQuotaAndNonPreemptible("2", "test1", 9, 1, 1, false),
+				defaultCreatePodWithQuotaAndNonPreemptible("3", "test1", 8, 1, 1, false),
+			},
+			quotaInfos: []*v1alpha1.ElasticQuota{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "test1",
+					},
+					Spec: v1alpha1.ElasticQuotaSpec{
+						Max: MakeResourceList().CPU(10).Mem(10).Obj(),
+						Min: MakeResourceList().CPU(5).Mem(5).Obj(),
+					},
+				},
+			},
+			totalResource:  createResourceList(10, 10),
+			expectedStatus: framework.NewStatus(framework.Success, ""),
+		},
+		{
+			name: "non-preemptible pod used larger than min",
+			pod:  defaultCreatePodWithQuotaAndNonPreemptible("4", "test1", 1, 2, 2, true),
+			initPods: []*corev1.Pod{
+				defaultCreatePodWithQuotaAndNonPreemptible("1", "test1", 10, 2, 1, false),
+				defaultCreatePodWithQuotaAndNonPreemptible("2", "test1", 9, 2, 1, true),
+				defaultCreatePodWithQuotaAndNonPreemptible("3", "test1", 9, 2, 1, true),
+			},
+			quotaInfos: []*v1alpha1.ElasticQuota{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "test1",
+					},
+					Spec: v1alpha1.ElasticQuotaSpec{
+						Max: MakeResourceList().CPU(10).Mem(8).Obj(),
+						Min: MakeResourceList().CPU(5).Mem(5).Obj(),
+					},
+				},
+			},
+			totalResource: createResourceList(8, 5),
+			expectedStatus: framework.NewStatus(framework.Unschedulable,
+				fmt.Sprintf("Insufficient non-preemptible quotas, "+
+					"quotaName: %v, min: %v, nonPreemptibleUsed: %v, pod's request: %v, exceedDimensions: [cpu]",
+					"test1", printResourceList(MakeResourceList().CPU(5).Mem(5).Obj()),
+					printResourceList(MakeResourceList().CPU(4).Mem(2).Obj()), printResourceList(MakeResourceList().CPU(2).Mem(2).Obj()))),
+		},
+		{
+			name: "non-preemptible pod will not be evicted",
+			pod:  defaultCreatePodWithQuotaAndNonPreemptible("4", "test1", 10, 2, 1, true),
+			initPods: []*corev1.Pod{
+				defaultCreatePodWithQuotaAndNonPreemptible("1", "test1", 10, 2, 1, false),
+				defaultCreatePodWithQuotaAndNonPreemptible("2", "test1", 4, 2, 1, false),
+				defaultCreatePodWithQuotaAndNonPreemptible("3", "test1", 1, 2, 2, true),
+			},
+			quotaInfos: []*v1alpha1.ElasticQuota{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "test1",
+					},
+					Spec: v1alpha1.ElasticQuotaSpec{
+						Max: MakeResourceList().CPU(10).Mem(8).Obj(),
+						Min: MakeResourceList().CPU(5).Mem(5).Obj(),
+					},
+				},
+			},
+			totalResource: createResourceList(7, 5),
+			expectedStatus: framework.NewStatus(framework.Unschedulable,
+				fmt.Sprintf("Insufficient quotas, "+
+					"quotaName: %v, runtime: %v, used: %v, pod's request: %v, exceedDimensions: [cpu]",
+					"test1", printResourceList(MakeResourceList().CPU(7).Mem(5).Obj()),
+					printResourceList(MakeResourceList().CPU(6).Mem(4).Obj()), printResourceList(MakeResourceList().CPU(2).Mem(1).Obj()))),
+		},
+	}
+	for _, tt := range test {
+		t.Run(tt.name, func(t *testing.T) {
+			suit := newPluginTestSuit(t, nil)
+			p, _ := suit.proxyNew(suit.elasticQuotaArgs, suit.Handle)
+			gp := p.(*Plugin)
+			gp.groupQuotaManager.UpdateClusterTotalResource(tt.totalResource)
+			for _, qis := range tt.quotaInfos {
+				gp.OnQuotaAdd(qis)
+			}
+
+			for _, pod := range tt.initPods {
+				gp.OnPodAdd(pod)
+			}
+			tt.pod.Spec.NodeName = ""
+			gp.OnPodAdd(tt.pod)
+
+			state := framework.NewCycleState()
+			ctx := context.TODO()
+			_, status := gp.PreFilter(ctx, state, tt.pod)
+			assert.Equal(t, status, tt.expectedStatus)
 		})
 	}
 }
@@ -941,7 +897,8 @@ func TestPlugin_Reserve(t *testing.T) {
 	for _, tt := range test {
 		t.Run(tt.name, func(t *testing.T) {
 			suit := newPluginTestSuit(t, nil)
-			p, _ := suit.proxyNew(suit.elasticQuotaArgs, suit.Handle)
+			p, err := suit.proxyNew(suit.elasticQuotaArgs, suit.Handle)
+			assert.Nil(t, err)
 			gp := p.(*Plugin)
 			pod := makePod2("pod", tt.quotaInfo.CalculateInfo.Used)
 			gp.OnPodAdd(pod)
@@ -977,7 +934,8 @@ func TestPlugin_Unreserve(t *testing.T) {
 	for _, tt := range test {
 		t.Run(tt.name, func(t *testing.T) {
 			suit := newPluginTestSuit(t, nil)
-			p, _ := suit.proxyNew(suit.elasticQuotaArgs, suit.Handle)
+			p, err := suit.proxyNew(suit.elasticQuotaArgs, suit.Handle)
+			assert.Nil(t, err)
 			gp := p.(*Plugin)
 			ctx := context.TODO()
 			gp.OnPodAdd(tt.pod)
@@ -1020,7 +978,8 @@ func TestPlugin_AddPod(t *testing.T) {
 	for _, tt := range test {
 		t.Run(tt.name, func(t *testing.T) {
 			suit := newPluginTestSuit(t, nil)
-			p, _ := suit.proxyNew(suit.elasticQuotaArgs, suit.Handle)
+			p, err := suit.proxyNew(suit.elasticQuotaArgs, suit.Handle)
+			assert.Nil(t, err)
 			gp := p.(*Plugin)
 			pod := makePod2("test", tt.quotaInfo.CalculateInfo.Used)
 			gp.OnPodAdd(pod)
@@ -1070,7 +1029,8 @@ func TestPlugin_RemovePod(t *testing.T) {
 	for _, tt := range test {
 		t.Run(tt.name, func(t *testing.T) {
 			suit := newPluginTestSuit(t, nil)
-			p, _ := suit.proxyNew(suit.elasticQuotaArgs, suit.Handle)
+			p, err := suit.proxyNew(suit.elasticQuotaArgs, suit.Handle)
+			assert.Nil(t, err)
 			gp := p.(*Plugin)
 			pod := makePod2("pod", tt.quotaInfo.CalculateInfo.Used)
 			gp.OnPodAdd(pod)
@@ -1261,8 +1221,8 @@ func TestPlugin_Recover(t *testing.T) {
 		suit.Handle.ClientSet().CoreV1().Nodes().Create(context.TODO(), node, metav1.CreateOptions{})
 	}
 	time.Sleep(100 * time.Millisecond)
-	suit.AddQuota("test1", "test-parent", 100, 1000, 0, 0, 0, 0, false, "")
 	suit.AddQuota("test-parent", extension.RootQuotaName, 100, 1000, 0, 0, 0, 0, true, "")
+	suit.AddQuota("test1", "test-parent", 100, 1000, 0, 0, 0, 0, false, "")
 	time.Sleep(100 * time.Millisecond)
 	pods := []*corev1.Pod{
 		defaultCreatePodWithQuotaName("1", "test1", 10, 10, 10),
@@ -1274,21 +1234,23 @@ func TestPlugin_Recover(t *testing.T) {
 		suit.Handle.ClientSet().CoreV1().Pods("").Create(context.TODO(), pod, metav1.CreateOptions{})
 	}
 	time.Sleep(100 * time.Millisecond)
-	p, _ := suit.proxyNew(suit.elasticQuotaArgs, suit.Handle)
+	p, err := suit.proxyNew(suit.elasticQuotaArgs, suit.Handle)
+	assert.Nil(t, err)
 	pl := p.(*Plugin)
 	time.Sleep(100 * time.Millisecond)
 	assert.Equal(t, pl.groupQuotaManager.GetQuotaInfoByName("test1").GetRequest(), createResourceList(40, 40))
 	assert.Equal(t, pl.groupQuotaManager.GetQuotaInfoByName("test1").GetUsed(), createResourceList(40, 40))
 	assert.True(t, quotav1.IsZero(pl.groupQuotaManager.GetQuotaInfoByName(extension.DefaultQuotaName).GetRequest()))
-	assert.Equal(t, len(pl.groupQuotaManager.GetAllQuotaNames()), 4)
+	assert.Equal(t, len(pl.groupQuotaManager.GetAllQuotaNames()), 5)
 }
 
 func TestPlugin_migrateDefaultQuotaGroupsPod(t *testing.T) {
 	suit := newPluginTestSuit(t, nil)
-	p, _ := suit.proxyNew(suit.elasticQuotaArgs, suit.Handle)
+	p, err := suit.proxyNew(suit.elasticQuotaArgs, suit.Handle)
+	assert.Nil(t, err)
 	plugin := p.(*Plugin)
 	gqm := plugin.groupQuotaManager
-	plugin.addQuota("test2", extension.RootQuotaName, 96, 160, 100, 160, 96, 160, true, "")
+	plugin.addQuota("test2", extension.RootQuotaName, 96, 160, 100, 160, 96, 160, true, "", "")
 	pods := []*corev1.Pod{
 		defaultCreatePodWithQuotaName("1", "test1", 10, 10, 10),
 		defaultCreatePodWithQuotaName("2", "test1", 10, 10, 10),
@@ -1300,7 +1262,7 @@ func TestPlugin_migrateDefaultQuotaGroupsPod(t *testing.T) {
 	}
 	assert.Equal(t, gqm.GetQuotaInfoByName(extension.DefaultQuotaName).GetRequest(), createResourceList(40, 40))
 	assert.Equal(t, 4, len(gqm.GetQuotaInfoByName(extension.DefaultQuotaName).PodCache))
-	plugin.addQuota("test1", extension.RootQuotaName, 96, 160, 100, 160, 96, 160, true, "")
+	plugin.addQuota("test1", extension.RootQuotaName, 96, 160, 100, 160, 96, 160, true, "", "")
 	time.Sleep(100 * time.Millisecond)
 	go plugin.Start()
 	for i := 0; i < 10; i++ {
@@ -1327,6 +1289,16 @@ func defaultCreatePodWithQuotaName(name, quotaName string, priority int32, cpu, 
 	pod.Labels[extension.LabelQuotaName] = quotaName
 	pod.UID = types.UID(name)
 	pod.Spec.NodeName = "test"
+	return pod
+}
+
+func defaultCreatePodWithQuotaAndNonPreemptible(name, quotaName string, priority int32, cpu, mem int64, nonPreempt bool) *corev1.Pod {
+	pod := defaultCreatePod(name, priority, cpu, mem)
+	pod.Labels[extension.LabelQuotaName] = quotaName
+	if nonPreempt {
+		pod.Labels[extension.LabelPreemptible] = "false"
+	}
+	pod.UID = types.UID(name)
 	return pod
 }
 

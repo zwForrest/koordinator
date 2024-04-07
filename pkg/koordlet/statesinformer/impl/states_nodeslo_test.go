@@ -58,7 +58,6 @@ func Test_mergeNodeSLOSpec(t *testing.T) {
 		SystemStrategy: &slov1alpha1.SystemStrategy{
 			WatermarkScaleFactor: pointer.Int64(200),
 		},
-		Extensions: &slov1alpha1.ExtensionsMap{},
 	}
 	testingMergedNodeSLOSpec := sloconfig.DefaultNodeSLOSpecConfig()
 	mergedInterface, err := util.MergeCfg(&testingMergedNodeSLOSpec, &testingCustomNodeSLOSpec)
@@ -270,6 +269,7 @@ func Test_mergeSLOSpecResourceUsedThresholdWithBE(t *testing.T) {
 		CPUSuppressThresholdPercent: pointer.Int64(80),
 		MemoryEvictThresholdPercent: pointer.Int64(70),
 		CPUSuppressPolicy:           slov1alpha1.CPUSetPolicy,
+		CPUEvictPolicy:              slov1alpha1.EvictByRealLimitPolicy,
 	}
 	type args struct {
 		defaultSpec *slov1alpha1.ResourceThresholdStrategy
@@ -307,6 +307,7 @@ func Test_mergeSLOSpecResourceUsedThresholdWithBE(t *testing.T) {
 				CPUSuppressThresholdPercent: pointer.Int64(80),
 				MemoryEvictThresholdPercent: pointer.Int64(75),
 				CPUSuppressPolicy:           slov1alpha1.CPUSetPolicy,
+				CPUEvictPolicy:              slov1alpha1.EvictByRealLimitPolicy,
 			},
 		},
 		{

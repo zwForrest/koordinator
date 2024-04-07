@@ -36,6 +36,9 @@ const (
 	// ElasticQuotaValidatingWebhook enables validating webhook for ElasticQuotas creations or updates
 	ElasticQuotaValidatingWebhook featuregate.Feature = "ElasticValidatingWebhook"
 
+	// NodeValidatingWebhook enables mutating webhook for Node Creation or updates
+	NodeMutatingWebhook featuregate.Feature = "NodeMutatingWebhook"
+
 	// NodeValidatingWebhook enables validating webhook for Node Creation or updates
 	NodeValidatingWebhook featuregate.Feature = "NodeValidatingWebhook"
 
@@ -45,8 +48,25 @@ const (
 	// ColocationProfileSkipMutatingResources config whether to update resourceName according to priority by default
 	ColocationProfileSkipMutatingResources featuregate.Feature = "ColocationProfileSkipMutatingResources"
 
-	// WebhookFramework enables webhook framework
+	// WebhookFramework enables webhook framework, global feature-gate for webhook
 	WebhookFramework featuregate.Feature = "WebhookFramework"
+
+	// MultiQuotaTree enables multi quota tree.
+	MultiQuotaTree featuregate.Feature = "MultiQuotaTree"
+
+	// ElasticQuotaIgnorePodOverhead ignore pod.spec.overhead when accounting pod requests
+	ElasticQuotaIgnorePodOverhead featuregate.Feature = "ElasticQuotaIgnorePodOverhead"
+
+	// ElasticQuotaGuaranteeUsage enable guarantee the quota usage
+	// In some specific scenarios, resources that have been allocated to users are considered
+	// to belong to the users and will not be preempted back.
+	ElasticQuotaGuaranteeUsage featuregate.Feature = "ElasticQuotaGuaranteeUsage"
+
+	// DisableDefaultQuota disable default quota.
+	DisableDefaultQuota featuregate.Feature = "DisableDefaultQuota"
+
+	// SupportParentQuotaSubmitPod enables parent Quota submit pod
+	SupportParentQuotaSubmitPod featuregate.Feature = "SupportParentQuotaSubmitPod"
 )
 
 var defaultFeatureGates = map[featuregate.Feature]featuregate.FeatureSpec{
@@ -54,21 +74,25 @@ var defaultFeatureGates = map[featuregate.Feature]featuregate.FeatureSpec{
 	PodValidatingWebhook:                   {Default: true, PreRelease: featuregate.Beta},
 	ElasticQuotaMutatingWebhook:            {Default: true, PreRelease: featuregate.Beta},
 	ElasticQuotaValidatingWebhook:          {Default: true, PreRelease: featuregate.Beta},
+	NodeMutatingWebhook:                    {Default: false, PreRelease: featuregate.Alpha},
 	NodeValidatingWebhook:                  {Default: false, PreRelease: featuregate.Alpha},
 	ConfigMapValidatingWebhook:             {Default: false, PreRelease: featuregate.Alpha},
 	WebhookFramework:                       {Default: true, PreRelease: featuregate.Beta},
 	ColocationProfileSkipMutatingResources: {Default: false, PreRelease: featuregate.Alpha},
+	MultiQuotaTree:                         {Default: false, PreRelease: featuregate.Alpha},
+	ElasticQuotaIgnorePodOverhead:          {Default: false, PreRelease: featuregate.Alpha},
+	ElasticQuotaGuaranteeUsage:             {Default: false, PreRelease: featuregate.Alpha},
+	DisableDefaultQuota:                    {Default: false, PreRelease: featuregate.Alpha},
+	SupportParentQuotaSubmitPod:            {Default: false, PreRelease: featuregate.Alpha},
 }
 
 const (
 	DisablePVCReservation featuregate.Feature = "DisablePVCReservation"
 )
 
-var (
-	defaultDeschedulerFeatureGates = map[featuregate.Feature]featuregate.FeatureSpec{
-		DisablePVCReservation: {Default: false, PreRelease: featuregate.Beta},
-	}
-)
+var defaultDeschedulerFeatureGates = map[featuregate.Feature]featuregate.FeatureSpec{
+	DisablePVCReservation: {Default: false, PreRelease: featuregate.Beta},
+}
 
 func init() {
 	runtime.Must(utilfeature.DefaultMutableFeatureGate.Add(defaultFeatureGates))

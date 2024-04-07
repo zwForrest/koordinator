@@ -62,23 +62,32 @@ func (r deviceResources) append(in deviceResources, hintMinors sets.Int) {
 	}
 }
 
-func (r deviceResources) subtract(in deviceResources) {
-	if len(r) == 0 {
+func (r deviceResources) subtract(in deviceResources, withNonNegativeResult bool) {
+	if r == nil {
 		return
 	}
 	for minor, res := range in {
-		resourceList, ok := r[minor]
-		if !ok {
-			continue
+		resourceList := r[minor]
+		if withNonNegativeResult {
+			resourceList = quotav1.SubtractWithNonNegativeResult(resourceList, res)
+		} else {
+			resourceList = quotav1.Subtract(resourceList, res)
 		}
-		resourceNames := quotav1.ResourceNames(resourceList)
-		resourceList = quotav1.SubtractWithNonNegativeResult(resourceList, quotav1.Mask(res, resourceNames))
 		if quotav1.IsZero(resourceList) {
 			delete(r, minor)
 		} else {
 			r[minor] = resourceList
 		}
 	}
+}
+
+func (r deviceResources) isZero() bool {
+	for _, v := range r {
+		if !quotav1.IsZero(v) {
+			return false
+		}
+	}
+	return true
 }
 
 func copyDeviceResources(m map[schedulingv1alpha1.DeviceType]deviceResources) map[schedulingv1alpha1.DeviceType]deviceResources {
@@ -89,13 +98,14 @@ func copyDeviceResources(m map[schedulingv1alpha1.DeviceType]deviceResources) ma
 	return r
 }
 
-func subtractAllocated(m, allocated map[schedulingv1alpha1.DeviceType]deviceResources) map[schedulingv1alpha1.DeviceType]deviceResources {
+func subtractAllocated(m, allocated map[schedulingv1alpha1.DeviceType]deviceResources, withNonNegativeResult bool) map[schedulingv1alpha1.DeviceType]deviceResources {
 	for deviceType, devicesResources := range allocated {
 		ra := m[deviceType]
-		if len(ra) == 0 {
-			continue
+		if ra == nil {
+			ra = deviceResources{}
+			m[deviceType] = ra
 		}
-		ra.subtract(devicesResources)
+		ra.subtract(devicesResources, withNonNegativeResult)
 		if len(ra) == 0 {
 			delete(m, deviceType)
 		}
@@ -155,24 +165,56 @@ type deviceResourceMinorPair struct {
 	preferred bool
 	minor     int
 	resources corev1.ResourceList
+	score     int64
 }
 
-func sortDeviceResourcesByMinor(resources deviceResources, preferred sets.Int) []deviceResourceMinorPair {
-	r := make([]deviceResourceMinorPair, 0, len(resources))
-	for k, v := range resources {
+func scoreDevices(podRequest corev1.ResourceList, totalResources, freeResources deviceResources, allocationScorer *resourceAllocationScorer) []deviceResourceMinorPair {
+	r := make([]deviceResourceMinorPair, 0, len(freeResources))
+	for minor, free := range freeResources {
+		var score int64
+		if allocationScorer != nil {
+			score = allocationScorer.scoreDevice(podRequest, totalResources[minor], free)
+		}
 		r = append(r, deviceResourceMinorPair{
-			preferred: preferred.Has(k),
-			minor:     k,
-			resources: v,
+			minor:     minor,
+			resources: free,
+			score:     score,
 		})
 	}
+	return r
+}
+
+func sortDeviceResourcesByMinor(r []deviceResourceMinorPair, preferred sets.Int) []deviceResourceMinorPair {
+	if preferred.Len() > 0 {
+		for i := range r {
+			r[i].preferred = preferred.Has(r[i].minor)
+		}
+	}
+
 	sort.Slice(r, func(i, j int) bool {
 		if r[i].preferred && !r[j].preferred {
 			return true
 		} else if !r[i].preferred && r[j].preferred {
 			return false
 		}
+		if r[i].score < r[j].score {
+			return false
+		} else if r[i].score > r[j].score {
+			return true
+		}
 		return r[i].minor < r[j].minor
 	})
 	return r
+}
+
+func sortDeviceResourcesByPreferredPCIe(r []deviceResourceMinorPair, preferredPCIe sets.String, deviceInfos map[int]*schedulingv1alpha1.DeviceInfo) []deviceResourceMinorPair {
+	for i := range r {
+		r[i].preferred = false
+		minor := r[i].minor
+		deviceInfo := deviceInfos[minor]
+		if deviceInfo != nil && deviceInfo.Topology != nil && preferredPCIe.Has(deviceInfo.Topology.PCIEID) {
+			r[i].preferred = true
+		}
+	}
+	return sortDeviceResourcesByMinor(r, nil)
 }

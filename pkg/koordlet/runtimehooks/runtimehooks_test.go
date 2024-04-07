@@ -19,6 +19,7 @@ package runtimehooks
 import (
 	"path"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
@@ -49,6 +50,8 @@ func Test_runtimeHook_Run(t *testing.T) {
 					RuntimeHooksPluginFailurePolicy: "Ignore",
 					RuntimeHookDisableStages:        []string{"PreRunPodSandbox"},
 					RuntimeHookConfigFilePath:       tmpDir,
+					RuntimeHooksNRI:                 true,
+					RuntimeHookReconcileInterval:    time.Second,
 				},
 				fg: map[string]bool{
 					string(GroupIdentity):   false,
@@ -70,6 +73,8 @@ func Test_runtimeHook_Run(t *testing.T) {
 					RuntimeHooksPluginFailurePolicy: "Ignore",
 					RuntimeHookDisableStages:        []string{"PreRunPodSandbox"},
 					RuntimeHookConfigFilePath:       tmpDir,
+					RuntimeHooksNRI:                 true,
+					RuntimeHookReconcileInterval:    time.Second,
 				},
 				fg: map[string]bool{
 					string(GroupIdentity):   false,
@@ -91,6 +96,8 @@ func Test_runtimeHook_Run(t *testing.T) {
 					RuntimeHooksPluginFailurePolicy: "Ignore",
 					RuntimeHookDisableStages:        []string{"PreRunPodSandbox"},
 					RuntimeHookConfigFilePath:       tmpDir,
+					RuntimeHooksNRI:                 true,
+					RuntimeHookReconcileInterval:    time.Second,
 				},
 				fg: map[string]bool{
 					string(GroupIdentity):   true,
@@ -114,7 +121,9 @@ func Test_runtimeHook_Run(t *testing.T) {
 			stop := make(chan struct{})
 
 			go func() { close(stop) }()
-			err = r.Run(stop)
+			assert.NotPanics(t, func() {
+				err = r.Run(stop)
+			})
 			assert.NoError(t, err)
 		})
 	}

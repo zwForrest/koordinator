@@ -31,11 +31,11 @@ import (
 	quotav1 "k8s.io/apiserver/pkg/quota/v1"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
-	"k8s.io/kubernetes/pkg/api/v1/resource"
-	"k8s.io/kubernetes/pkg/scheduler/util"
+	k8sutil "k8s.io/kubernetes/pkg/scheduler/util"
 
 	"github.com/koordinator-sh/koordinator/apis/extension"
 	"github.com/koordinator-sh/koordinator/pkg/scheduler/plugins/elasticquota/core"
+	"github.com/koordinator-sh/koordinator/pkg/util"
 )
 
 const (
@@ -72,16 +72,17 @@ func (monitor *QuotaOverUsedGroupMonitor) monitor() bool {
 	var overUseContinueDuration time.Duration
 	if !isLessEqual {
 		overUseContinueDuration = time.Since(monitor.lastUnderUsedTime)
-		klog.V(5).Infof("Quota used is large than runtime, quotaName:%v, resDimensions:%v, used:%v, "+
-			"runtime:%v", monitor.quotaName, exceedDimensions, used, runtime)
+		if klog.V(5).Enabled() {
+			klog.Infof("Quota used is large than runtime, quotaName: %v, resDimensions: %v, used: %v, runtime: %v",
+				monitor.quotaName, exceedDimensions, util.DumpJSON(used), util.DumpJSON(runtime))
+		}
 	} else {
 		monitor.lastUnderUsedTime = time.Now()
 	}
 
 	if overUseContinueDuration > monitor.overUsedTriggerEvictDuration {
-		klog.V(5).Infof("Quota used continue large than runtime, prepare trigger evict, quotaName:%v,"+
-			"overUseContinueDuration:%v, config:%v", monitor.quotaName, overUseContinueDuration,
-			monitor.overUsedTriggerEvictDuration)
+		klog.V(5).Infof("Quota used continue large than runtime, prepare trigger evict, quotaName: %v, overUseContinueDuration: %v, config: %v",
+			monitor.quotaName, overUseContinueDuration, monitor.overUsedTriggerEvictDuration)
 		monitor.lastUnderUsedTime = time.Now()
 		return true
 	}
@@ -101,7 +102,7 @@ func (monitor *QuotaOverUsedGroupMonitor) getToRevokePodList(quotaName string) [
 	// order pod from low priority -> high priority
 	priPodCache := quotaInfo.GetPodThatIsAssigned()
 
-	sort.Slice(priPodCache, func(i, j int) bool { return !util.MoreImportantPod(priPodCache[i], priPodCache[j]) })
+	sort.Slice(priPodCache, func(i, j int) bool { return !k8sutil.MoreImportantPod(priPodCache[i], priPodCache[j]) })
 
 	// first try revoke all until used <= runtime
 	tryAssignBackPodCache := make([]*v1.Pod, 0)
@@ -110,8 +111,11 @@ func (monitor *QuotaOverUsedGroupMonitor) getToRevokePodList(quotaName string) [
 		if shouldBreak, _ := quotav1.LessThanOrEqual(used, runtime); shouldBreak {
 			break
 		}
-		podReq, _ := resource.PodRequestsAndLimits(pod)
-		used = quotav1.Subtract(used, podReq)
+		if extension.IsPodNonPreemptible(pod) {
+			continue
+		}
+		podReq, _ := core.PodRequestsAndLimits(pod)
+		used = quotav1.Mask(quotav1.Subtract(used, podReq), quotav1.ResourceNames(podReq))
 		tryAssignBackPodCache = append(tryAssignBackPodCache, pod)
 	}
 
@@ -128,8 +132,8 @@ func (monitor *QuotaOverUsedGroupMonitor) getToRevokePodList(quotaName string) [
 	realRevokePodCache := make([]*v1.Pod, 0)
 	for index := len(tryAssignBackPodCache) - 1; index >= 0; index-- {
 		pod := tryAssignBackPodCache[index]
-		podRequest, _ := resource.PodRequestsAndLimits(pod)
-		used = quotav1.Add(used, podRequest)
+		podRequest, _ := core.PodRequestsAndLimits(pod)
+		used = quotav1.Mask(quotav1.Add(used, podRequest), quotav1.ResourceNames(podRequest))
 		if canAssignBack, _ := quotav1.LessThanOrEqual(used, runtime); !canAssignBack {
 			used = quotav1.Subtract(used, podRequest)
 			realRevokePodCache = append(realRevokePodCache, pod)
@@ -143,25 +147,25 @@ func (monitor *QuotaOverUsedGroupMonitor) getToRevokePodList(quotaName string) [
 }
 
 type QuotaOverUsedRevokeController struct {
-	clientSet                    clientset.Interface
-	groupQuotaManger             *core.GroupQuotaManager
 	monitorsLock                 sync.RWMutex
 	monitors                     map[string]*QuotaOverUsedGroupMonitor
 	overUsedTriggerEvictDuration time.Duration
 	revokePodCycle               time.Duration
 	monitorAllQuotas             bool
+	enableRuntimeQuota           bool
+	plugin                       *Plugin
 }
 
-func NewQuotaOverUsedRevokeController(client clientset.Interface, overUsedTriggerEvictDuration, revokePodCycle time.Duration,
-	groupQuotaManager *core.GroupQuotaManager, monitorAllQuotas bool) *QuotaOverUsedRevokeController {
+func NewQuotaOverUsedRevokeController(plugin *Plugin) *QuotaOverUsedRevokeController {
 	controller := &QuotaOverUsedRevokeController{
-		clientSet:                    client,
-		groupQuotaManger:             groupQuotaManager,
-		overUsedTriggerEvictDuration: overUsedTriggerEvictDuration,
-		revokePodCycle:               revokePodCycle,
+		plugin:                       plugin,
+		overUsedTriggerEvictDuration: plugin.pluginArgs.DelayEvictTime.Duration,
+		revokePodCycle:               plugin.pluginArgs.RevokePodInterval.Duration,
 		monitors:                     make(map[string]*QuotaOverUsedGroupMonitor),
-		monitorAllQuotas:             monitorAllQuotas,
 	}
+	controller.monitorAllQuotas = plugin.pluginArgs.MonitorAllQuotas
+	controller.enableRuntimeQuota = plugin.pluginArgs.EnableRuntimeQuota
+
 	return controller
 }
 
@@ -170,6 +174,14 @@ func (controller *QuotaOverUsedRevokeController) Name() string {
 }
 
 func (controller *QuotaOverUsedRevokeController) Start() {
+	if !controller.monitorAllQuotas {
+		klog.Infof("monitorAllQuotas not true. will not start elasticQuota QuotaOverUsedRevokeController")
+		return
+	}
+	if !controller.enableRuntimeQuota {
+		klog.Infof("enableRuntimeQuota is false. will not start elasticQuota QuotaOverUsedRevokeController")
+		return
+	}
 	go wait.Until(controller.revokePodDueToQuotaOverUsed, controller.revokePodCycle, nil)
 	klog.Infof("start elasticQuota QuotaOverUsedRevokeController")
 }
@@ -177,12 +189,12 @@ func (controller *QuotaOverUsedRevokeController) Start() {
 func (controller *QuotaOverUsedRevokeController) revokePodDueToQuotaOverUsed() {
 	toRevokePods := controller.monitorAll()
 	for _, pod := range toRevokePods {
-		if err := EvictPod(context.TODO(), controller.clientSet, pod, &metav1.DeleteOptions{}); err != nil {
+		if err := EvictPod(context.TODO(), controller.plugin.handle.ClientSet(), pod, &metav1.DeleteOptions{}); err != nil {
 			klog.Errorf("failed to revoke pod due to quota overused, pod:%v, error:%s",
 				pod.Name, err)
 			continue
 		}
-		klog.V(5).Infof("finish revoke pod due to quota overused, pod:%v",
+		klog.V(5).Infof("finish revoke pod due to quota overused, pod: %v",
 			pod.Name)
 	}
 }
@@ -204,15 +216,19 @@ func (controller *QuotaOverUsedRevokeController) syncQuota() {
 	controller.monitorsLock.Lock()
 	defer controller.monitorsLock.Unlock()
 
-	allQuotaNames := controller.groupQuotaManger.GetAllQuotaNames()
+	managers := []*core.GroupQuotaManager{controller.plugin.groupQuotaManager}
+	managers = append(managers, controller.plugin.ListGroupQuotaManagersForQuotaTree()...)
 
-	for quotaName := range allQuotaNames {
-		if quotaName == extension.SystemQuotaName || quotaName == extension.RootQuotaName {
-			continue
-		}
-
-		if controller.monitors[quotaName] == nil {
-			controller.addQuota(quotaName)
+	allQuotaNames := make(map[string]struct{})
+	for _, mgr := range managers {
+		for quotaName := range mgr.GetAllQuotaNames() {
+			if quotaName == extension.SystemQuotaName || quotaName == extension.RootQuotaName {
+				continue
+			}
+			allQuotaNames[quotaName] = struct{}{}
+			if controller.monitors[quotaName] == nil {
+				controller.addQuota(quotaName, mgr)
+			}
 		}
 	}
 
@@ -223,20 +239,17 @@ func (controller *QuotaOverUsedRevokeController) syncQuota() {
 	}
 }
 
-func (controller *QuotaOverUsedRevokeController) addQuota(quotaName string) {
-	controller.monitors[quotaName] = NewQuotaOverUsedGroupMonitor(quotaName, controller.groupQuotaManger, controller.overUsedTriggerEvictDuration)
-	klog.V(5).Infof("QuotaOverUseRescheduleController add quota:%v", quotaName)
+func (controller *QuotaOverUsedRevokeController) addQuota(quotaName string, mgr *core.GroupQuotaManager) {
+	controller.monitors[quotaName] = NewQuotaOverUsedGroupMonitor(quotaName, mgr, controller.overUsedTriggerEvictDuration)
+	klog.V(5).Infof("QuotaOverUseRescheduleController add quota: %v", quotaName)
 }
 
 func (controller *QuotaOverUsedRevokeController) deleteQuota(quotaName string) {
 	delete(controller.monitors, quotaName)
-	klog.V(5).Infof("QuotaOverUseRescheduleController delete quota:%v", quotaName)
+	klog.V(5).Infof("QuotaOverUseRescheduleController delete quota: %v", quotaName)
 }
 
 func (controller *QuotaOverUsedRevokeController) getToMonitorQuotas() map[string]*QuotaOverUsedGroupMonitor {
-	if !controller.monitorAllQuotas {
-		return nil
-	}
 	monitors := make(map[string]*QuotaOverUsedGroupMonitor)
 
 	{

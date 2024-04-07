@@ -180,7 +180,11 @@ func Test_reconciler_reconcilePodCgroup(t *testing.T) {
 		c := &reconciler{
 			podsMeta:   []*statesinformer.PodMeta{test.fields.podsMeta},
 			podUpdated: make(chan struct{}, 1),
+			executor:   resourceexecutor.NewTestResourceExecutor(),
 		}
+		newStopCh := make(chan struct{})
+		defer close(newStopCh)
+		c.executor.Run(newStopCh)
 		c.podUpdated <- struct{}{}
 		c.reconcilePodCgroup(stopCh)
 		assert.Equal(t, test.wants.wantPods, podLevelOutput, "pod reconciler should be equal")
@@ -218,7 +222,9 @@ func Test_reconciler_podRefreshCallback(t *testing.T) {
 			c := &reconciler{
 				podUpdated: make(chan struct{}, 1),
 			}
-			c.podRefreshCallback(statesinformer.RegisterTypeAllPods, nil, tt.args.podsMeta)
+			c.podRefreshCallback(statesinformer.RegisterTypeAllPods, nil, &statesinformer.CallbackTarget{
+				Pods: tt.args.podsMeta,
+			})
 			assert.Equal(t, c.podsMeta, tt.args.podsMeta, "callback update pod meta")
 		})
 	}
@@ -229,11 +235,11 @@ func TestNewReconciler(t *testing.T) {
 	defer ctrl.Finish()
 	si := mock_statesinformer.NewMockStatesInformer(ctrl)
 	si.EXPECT().RegisterCallbacks(statesinformer.RegisterTypeAllPods, gomock.Any(), gomock.Any(), gomock.Any())
-	op := Options{
+	ctx := Context{
 		StatesInformer: si,
 		Executor:       resourceexecutor.NewResourceUpdateExecutor(),
 	}
-	r := NewReconciler(op)
+	r := NewReconciler(ctx)
 	nr := r.(*reconciler)
 	stopCh := make(chan struct{}, 1)
 	stopCh <- struct{}{}

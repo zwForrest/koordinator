@@ -29,26 +29,34 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/clock"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/utils/pointer"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	"github.com/koordinator-sh/koordinator/apis/configuration"
 	"github.com/koordinator-sh/koordinator/apis/extension"
+	schedulingv1alpha1 "github.com/koordinator-sh/koordinator/apis/scheduling/v1alpha1"
 	slov1alpha1 "github.com/koordinator-sh/koordinator/apis/slo/v1alpha1"
 	"github.com/koordinator-sh/koordinator/pkg/slo-controller/noderesource/framework"
+	"github.com/koordinator-sh/koordinator/pkg/slo-controller/noderesource/plugins/batchresource"
+	"github.com/koordinator-sh/koordinator/pkg/slo-controller/noderesource/plugins/midresource"
 )
 
 func init() {
-	addPlugins(framework.AllPass)
+	addPlugins(func(s string) bool {
+		return s == midresource.PluginName || s == batchresource.PluginName
+	})
 }
 
 type FakeCfgCache struct {
-	cfg         extension.ColocationCfg
+	cfg         configuration.ColocationCfg
 	available   bool
 	errorStatus bool
 }
 
-func (f *FakeCfgCache) GetCfgCopy() *extension.ColocationCfg {
+func (f *FakeCfgCache) GetCfgCopy() *configuration.ColocationCfg {
 	return &f.cfg
 }
 
@@ -60,18 +68,18 @@ func (f *FakeCfgCache) IsErrorStatus() bool {
 	return f.errorStatus
 }
 
-var _ framework.NodeMetaSyncPlugin = (*fakeNodeMetaSyncPlugin)(nil)
+var _ framework.NodeMetaCheckPlugin = (*fakeNodeMetaCheckPlugin)(nil)
 
-type fakeNodeMetaSyncPlugin struct {
+type fakeNodeMetaCheckPlugin struct {
 	CheckLabels []string
 	AlwaysSync  bool
 }
 
-func (p *fakeNodeMetaSyncPlugin) Name() string {
-	return "fakeNodeMetaSyncPlugin"
+func (p *fakeNodeMetaCheckPlugin) Name() string {
+	return "fakeNodeMetaCheckPlugin"
 }
 
-func (p *fakeNodeMetaSyncPlugin) NeedSyncMeta(strategy *extension.ColocationStrategy, oldNode, newNode *corev1.Node) (bool, string) {
+func (p *fakeNodeMetaCheckPlugin) NeedSyncMeta(strategy *configuration.ColocationStrategy, oldNode, newNode *corev1.Node) (bool, string) {
 	if p.AlwaysSync {
 		return true, "always sync"
 	}
@@ -171,12 +179,12 @@ func Test_calculateNodeResource(t *testing.T) {
 				{
 					Name:     extension.BatchCPU,
 					Quantity: resource.NewQuantity(0, resource.DecimalSI),
-					Message:  "batchAllocatable[CPU(Milli-Core)]:0 = nodeAllocatable:20000 - nodeReservation:7000 - systemUsage:0 - podHPUsed:20000",
+					Message:  "batchAllocatable[CPU(Milli-Core)]:0 = nodeCapacity:20000 - nodeSafetyMargin:7000 - systemUsageOrNodeReserved:0 - podHPUsed:20000",
 				},
 				{
 					Name:     extension.BatchMemory,
 					Quantity: resource.NewScaledQuantity(6, 9),
-					Message:  "batchAllocatable[Mem(GB)]:6 = nodeAllocatable:40 - nodeReservation:14 - systemUsage:0 - podHPUsed:20",
+					Message:  "batchAllocatable[Mem(GB)]:6 = nodeCapacity:40 - nodeSafetyMargin:14 - systemUsage:0 - podHPUsed:20",
 				},
 				{
 					Name:    extension.MidCPU,
@@ -333,6 +341,12 @@ func Test_calculateNodeResource(t *testing.T) {
 									corev1.ResourceMemory: resource.MustParse("55G"),
 								},
 							},
+							SystemUsage: slov1alpha1.ResourceMap{
+								ResourceList: corev1.ResourceList{
+									corev1.ResourceCPU:    resource.MustParse("7"),
+									corev1.ResourceMemory: resource.MustParse("12G"),
+								},
+							},
 						},
 						PodsMetric: []*slov1alpha1.PodMetricInfo{
 							{
@@ -372,12 +386,12 @@ func Test_calculateNodeResource(t *testing.T) {
 				{
 					Name:     extension.BatchCPU,
 					Quantity: resource.NewQuantity(25000, resource.DecimalSI),
-					Message:  "batchAllocatable[CPU(Milli-Core)]:25000 = nodeAllocatable:100000 - nodeReservation:35000 - systemUsage:7000 - podHPUsed:33000",
+					Message:  "batchAllocatable[CPU(Milli-Core)]:25000 = nodeCapacity:100000 - nodeSafetyMargin:35000 - systemUsageOrNodeReserved:7000 - podHPUsed:33000",
 				},
 				{
 					Name:     extension.BatchMemory,
 					Quantity: resource.NewScaledQuantity(33, 9),
-					Message:  "batchAllocatable[Mem(GB)]:33 = nodeAllocatable:120 - nodeReservation:42 - systemUsage:12 - podHPUsed:33",
+					Message:  "batchAllocatable[Mem(GB)]:33 = nodeCapacity:120 - nodeSafetyMargin:42 - systemUsage:12 - podHPUsed:33",
 				},
 				{
 					Name:    extension.MidCPU,
@@ -537,6 +551,12 @@ func Test_calculateNodeResource(t *testing.T) {
 									corev1.ResourceMemory: resource.MustParse("55G"),
 								},
 							},
+							SystemUsage: slov1alpha1.ResourceMap{
+								ResourceList: corev1.ResourceList{
+									corev1.ResourceCPU:    resource.MustParse("7"),
+									corev1.ResourceMemory: resource.MustParse("12G"),
+								},
+							},
 						},
 						PodsMetric: []*slov1alpha1.PodMetricInfo{
 							{
@@ -576,12 +596,12 @@ func Test_calculateNodeResource(t *testing.T) {
 				{
 					Name:     extension.BatchCPU,
 					Quantity: resource.NewQuantity(30000, resource.DecimalSI),
-					Message:  "batchAllocatable[CPU(Milli-Core)]:30000 = nodeAllocatable:100000 - nodeReservation:30000 - systemUsage:7000 - podHPUsed:33000",
+					Message:  "batchAllocatable[CPU(Milli-Core)]:30000 = nodeCapacity:100000 - nodeSafetyMargin:30000 - systemUsageOrNodeReserved:7000 - podHPUsed:33000",
 				},
 				{
 					Name:     extension.BatchMemory,
 					Quantity: resource.NewScaledQuantity(39, 9),
-					Message:  "batchAllocatable[Mem(GB)]:39 = nodeAllocatable:120 - nodeReservation:36 - systemUsage:12 - podHPUsed:33",
+					Message:  "batchAllocatable[Mem(GB)]:39 = nodeCapacity:120 - nodeSafetyMargin:36 - systemUsage:12 - podHPUsed:33",
 				},
 				{
 					Name:    extension.MidCPU,
@@ -741,6 +761,12 @@ func Test_calculateNodeResource(t *testing.T) {
 									corev1.ResourceMemory: resource.MustParse("55G"),
 								},
 							},
+							SystemUsage: slov1alpha1.ResourceMap{
+								ResourceList: corev1.ResourceList{
+									corev1.ResourceCPU:    resource.MustParse("7"),
+									corev1.ResourceMemory: resource.MustParse("12G"),
+								},
+							},
 						},
 						PodsMetric: []*slov1alpha1.PodMetricInfo{
 							{
@@ -780,12 +806,12 @@ func Test_calculateNodeResource(t *testing.T) {
 				{
 					Name:     extension.BatchCPU,
 					Quantity: resource.NewQuantity(30000, resource.DecimalSI),
-					Message:  "batchAllocatable[CPU(Milli-Core)]:30000 = nodeAllocatable:100000 - nodeReservation:30000 - systemUsage:7000 - podHPUsed:33000",
+					Message:  "batchAllocatable[CPU(Milli-Core)]:30000 = nodeCapacity:100000 - nodeSafetyMargin:30000 - systemUsageOrNodeReserved:7000 - podHPUsed:33000",
 				},
 				{
 					Name:     extension.BatchMemory,
 					Quantity: resource.NewScaledQuantity(36, 9),
-					Message:  "batchAllocatable[Mem(GB)]:36 = nodeAllocatable:120 - nodeReservation:24 - podHPRequest:60",
+					Message:  "batchAllocatable[Mem(GB)]:36 = nodeCapacity:120 - nodeSafetyMargin:24 - nodeReserved:0 - podHPRequest:60",
 				},
 				{
 					Name:    extension.MidCPU,
@@ -942,6 +968,12 @@ func Test_calculateNodeResource(t *testing.T) {
 									corev1.ResourceMemory: resource.MustParse("55G"),
 								},
 							},
+							SystemUsage: slov1alpha1.ResourceMap{
+								ResourceList: corev1.ResourceList{
+									corev1.ResourceCPU:    resource.MustParse("7"),
+									corev1.ResourceMemory: resource.MustParse("12G"),
+								},
+							},
 						},
 						PodsMetric: []*slov1alpha1.PodMetricInfo{
 							{
@@ -989,12 +1021,12 @@ func Test_calculateNodeResource(t *testing.T) {
 				{
 					Name:     extension.BatchCPU,
 					Quantity: resource.NewQuantity(25000, resource.DecimalSI),
-					Message:  "batchAllocatable[CPU(Milli-Core)]:25000 = nodeAllocatable:100000 - nodeReservation:35000 - systemUsage:7000 - podHPUsed:33000",
+					Message:  "batchAllocatable[CPU(Milli-Core)]:25000 = nodeCapacity:100000 - nodeSafetyMargin:35000 - systemUsageOrNodeReserved:7000 - podHPUsed:33000",
 				},
 				{
 					Name:     extension.BatchMemory,
 					Quantity: resource.NewScaledQuantity(33, 9),
-					Message:  "batchAllocatable[Mem(GB)]:33 = nodeAllocatable:120 - nodeReservation:42 - systemUsage:12 - podHPUsed:33",
+					Message:  "batchAllocatable[Mem(GB)]:33 = nodeCapacity:120 - nodeSafetyMargin:42 - systemUsage:12 - podHPUsed:33",
 				},
 				{
 					Name:     extension.MidCPU,
@@ -1010,12 +1042,20 @@ func Test_calculateNodeResource(t *testing.T) {
 		},
 	}
 
+	scheme := runtime.NewScheme()
+	clientgoscheme.AddToScheme(scheme)
+	slov1alpha1.AddToScheme(scheme)
+	schedulingv1alpha1.AddToScheme(scheme)
+	client := fake.NewClientBuilder().WithScheme(scheme).Build()
+	opt := framework.NewOption().WithClient(client).WithScheme(scheme).WithControllerBuilder(&builder.Builder{})
+	framework.RunSetupExtenders(opt)
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			memoryCalculateByReq := extension.CalculateByPodRequest
+			memoryCalculateByReq := configuration.CalculateByPodRequest
 			r := NodeResourceReconciler{cfgCache: &FakeCfgCache{
-				cfg: extension.ColocationCfg{
-					ColocationStrategy: extension.ColocationStrategy{
+				cfg: configuration.ColocationCfg{
+					ColocationStrategy: configuration.ColocationStrategy{
 						Enable:                        pointer.Bool(true),
 						CPUReclaimThresholdPercent:    pointer.Int64(65),
 						MemoryReclaimThresholdPercent: pointer.Int64(65),
@@ -1023,9 +1063,9 @@ func Test_calculateNodeResource(t *testing.T) {
 						UpdateTimeThresholdSeconds:    pointer.Int64(300),
 						ResourceDiffThreshold:         pointer.Float64(0.1),
 					},
-					NodeConfigs: []extension.NodeColocationCfg{
+					NodeConfigs: []configuration.NodeColocationCfg{
 						{
-							NodeCfgProfile: extension.NodeCfgProfile{
+							NodeCfgProfile: configuration.NodeCfgProfile{
 								NodeSelector: &metav1.LabelSelector{
 									MatchLabels: map[string]string{
 										"xxx": "yyy",
@@ -1033,13 +1073,13 @@ func Test_calculateNodeResource(t *testing.T) {
 								},
 								Name: "xxx-yyy",
 							},
-							ColocationStrategy: extension.ColocationStrategy{
+							ColocationStrategy: configuration.ColocationStrategy{
 								CPUReclaimThresholdPercent:    pointer.Int64(70),
 								MemoryReclaimThresholdPercent: pointer.Int64(70),
 							},
 						},
 						{
-							NodeCfgProfile: extension.NodeCfgProfile{
+							NodeCfgProfile: configuration.NodeCfgProfile{
 								NodeSelector: &metav1.LabelSelector{
 									MatchLabels: map[string]string{
 										"memory-calculate-by-request": "true",
@@ -1047,14 +1087,14 @@ func Test_calculateNodeResource(t *testing.T) {
 								},
 								Name: "memory-calculate-by-request-true",
 							},
-							ColocationStrategy: extension.ColocationStrategy{
+							ColocationStrategy: configuration.ColocationStrategy{
 								CPUReclaimThresholdPercent:    pointer.Int64(70),
 								MemoryReclaimThresholdPercent: pointer.Int64(80),
 								MemoryCalculatePolicy:         &memoryCalculateByReq,
 							},
 						},
 						{
-							NodeCfgProfile: extension.NodeCfgProfile{
+							NodeCfgProfile: configuration.NodeCfgProfile{
 								NodeSelector: &metav1.LabelSelector{
 									MatchLabels: map[string]string{
 										"abc": "def",
@@ -1062,7 +1102,7 @@ func Test_calculateNodeResource(t *testing.T) {
 								},
 								Name: "abc-def",
 							},
-							ColocationStrategy: extension.ColocationStrategy{
+							ColocationStrategy: configuration.ColocationStrategy{
 								CPUReclaimThresholdPercent:    pointer.Int64(60),
 								MemoryReclaimThresholdPercent: pointer.Int64(60),
 							},
@@ -1093,7 +1133,7 @@ func Test_calculateNodeResource(t *testing.T) {
 
 func Test_isColocationCfgDisabled(t *testing.T) {
 	type fields struct {
-		config extension.ColocationCfg
+		config configuration.ColocationCfg
 	}
 	type args struct {
 		node *corev1.Node
@@ -1106,7 +1146,7 @@ func Test_isColocationCfgDisabled(t *testing.T) {
 	}{
 		{
 			name:   "set as disabled when no config",
-			fields: fields{config: extension.ColocationCfg{}},
+			fields: fields{config: configuration.ColocationCfg{}},
 			args: args{
 				node: &corev1.Node{
 					ObjectMeta: metav1.ObjectMeta{
@@ -1129,8 +1169,8 @@ func Test_isColocationCfgDisabled(t *testing.T) {
 		{
 			name: "use cluster config when nil node",
 			fields: fields{
-				config: extension.ColocationCfg{
-					ColocationStrategy: extension.ColocationStrategy{
+				config: configuration.ColocationCfg{
+					ColocationStrategy: configuration.ColocationStrategy{
 						Enable:                        pointer.Bool(false),
 						CPUReclaimThresholdPercent:    pointer.Int64(65),
 						MemoryReclaimThresholdPercent: pointer.Int64(65),
@@ -1138,16 +1178,16 @@ func Test_isColocationCfgDisabled(t *testing.T) {
 						UpdateTimeThresholdSeconds:    pointer.Int64(300),
 						ResourceDiffThreshold:         pointer.Float64(0.1),
 					},
-					NodeConfigs: []extension.NodeColocationCfg{
+					NodeConfigs: []configuration.NodeColocationCfg{
 						{
-							NodeCfgProfile: extension.NodeCfgProfile{
+							NodeCfgProfile: configuration.NodeCfgProfile{
 								NodeSelector: &metav1.LabelSelector{
 									MatchLabels: map[string]string{
 										"xxx": "yyy",
 									},
 								},
 							},
-							ColocationStrategy: extension.ColocationStrategy{
+							ColocationStrategy: configuration.ColocationStrategy{
 								Enable: pointer.Bool(true),
 							},
 						},
@@ -1170,8 +1210,8 @@ func Test_isColocationCfgDisabled(t *testing.T) {
 }
 
 func Test_updateNodeResource(t *testing.T) {
-	enabledCfg := &extension.ColocationCfg{
-		ColocationStrategy: extension.ColocationStrategy{
+	enabledCfg := &configuration.ColocationCfg{
+		ColocationStrategy: configuration.ColocationStrategy{
 			Enable:                        pointer.Bool(true),
 			CPUReclaimThresholdPercent:    pointer.Int64(65),
 			MemoryReclaimThresholdPercent: pointer.Int64(65),
@@ -1180,8 +1220,8 @@ func Test_updateNodeResource(t *testing.T) {
 			ResourceDiffThreshold:         pointer.Float64(0.1),
 		},
 	}
-	disableCfg := &extension.ColocationCfg{
-		ColocationStrategy: extension.ColocationStrategy{
+	disableCfg := &configuration.ColocationCfg{
+		ColocationStrategy: configuration.ColocationStrategy{
 			Enable:                        pointer.Bool(false),
 			CPUReclaimThresholdPercent:    pointer.Int64(65),
 			MemoryReclaimThresholdPercent: pointer.Int64(65),
@@ -1191,10 +1231,10 @@ func Test_updateNodeResource(t *testing.T) {
 		},
 	}
 	type fields struct {
-		Client                    client.Client
-		config                    *extension.ColocationCfg
-		SyncContext               *framework.SyncContext
-		prepareNodeMetaSyncPlugin []framework.NodeMetaSyncPlugin
+		Client                     client.Client
+		config                     *configuration.ColocationCfg
+		SyncContext                *framework.SyncContext
+		prepareNodeMetaCheckPlugin []framework.NodeMetaCheckPlugin
 	}
 	type args struct {
 		oldNode *corev1.Node
@@ -1473,32 +1513,32 @@ func Test_updateNodeResource(t *testing.T) {
 						},
 					},
 				}).Build(),
-				config: &extension.ColocationCfg{
+				config: &configuration.ColocationCfg{
 					ColocationStrategy: enabledCfg.ColocationStrategy,
-					NodeConfigs: []extension.NodeColocationCfg{
+					NodeConfigs: []configuration.NodeColocationCfg{
 						{
-							NodeCfgProfile: extension.NodeCfgProfile{
+							NodeCfgProfile: configuration.NodeCfgProfile{
 								NodeSelector: &metav1.LabelSelector{
 									MatchLabels: map[string]string{
 										"xxx": "yyy",
 									},
 								},
 							},
-							ColocationStrategy: extension.ColocationStrategy{
+							ColocationStrategy: configuration.ColocationStrategy{
 								CPUReclaimThresholdPercent:    pointer.Int64(65),
 								MemoryReclaimThresholdPercent: pointer.Int64(65),
 								ResourceDiffThreshold:         pointer.Float64(0.6),
 							},
 						},
 						{
-							NodeCfgProfile: extension.NodeCfgProfile{
+							NodeCfgProfile: configuration.NodeCfgProfile{
 								NodeSelector: &metav1.LabelSelector{
 									MatchLabels: map[string]string{
 										"abc": "def",
 									},
 								},
 							},
-							ColocationStrategy: extension.ColocationStrategy{
+							ColocationStrategy: configuration.ColocationStrategy{
 								CPUReclaimThresholdPercent:    pointer.Int64(60),
 								MemoryReclaimThresholdPercent: pointer.Int64(60),
 							},
@@ -1680,8 +1720,8 @@ func Test_updateNodeResource(t *testing.T) {
 				SyncContext: framework.NewSyncContext().WithContext(
 					map[string]time.Time{"/test-node0": time.Now()},
 				),
-				prepareNodeMetaSyncPlugin: []framework.NodeMetaSyncPlugin{
-					&fakeNodeMetaSyncPlugin{
+				prepareNodeMetaCheckPlugin: []framework.NodeMetaCheckPlugin{
+					&fakeNodeMetaCheckPlugin{
 						AlwaysSync: true,
 					},
 				},
@@ -1693,38 +1733,38 @@ func Test_updateNodeResource(t *testing.T) {
 					},
 					Status: corev1.NodeStatus{
 						Allocatable: corev1.ResourceList{
-							extension.BatchCPU:    resource.MustParse("20"),
-							extension.BatchMemory: resource.MustParse("40G"),
+							corev1.ResourceCPU:    resource.MustParse("20"),
+							corev1.ResourceMemory: resource.MustParse("40Gi"),
 						},
 						Capacity: corev1.ResourceList{
-							extension.BatchCPU:    resource.MustParse("20"),
-							extension.BatchMemory: resource.MustParse("40G"),
+							corev1.ResourceCPU:    resource.MustParse("20"),
+							corev1.ResourceMemory: resource.MustParse("40Gi"),
 						},
 					},
 				},
 				nr: framework.NewNodeResource([]framework.ResourceItem{
 					{
-						Name:     extension.BatchCPU,
-						Quantity: resource.NewQuantity(20, resource.DecimalSI),
-					},
-					{
-						Name:     extension.BatchMemory,
-						Quantity: resource.NewQuantity(40*1024*1024*1024, resource.BinarySI),
+						Labels: map[string]string{
+							"xxx": "yyy",
+						},
 					},
 				}...),
 			},
 			want: &corev1.Node{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "test-node0",
+					Labels: map[string]string{
+						"xxx": "yyy",
+					},
 				},
 				Status: corev1.NodeStatus{
 					Allocatable: corev1.ResourceList{
-						extension.BatchCPU:    resource.MustParse("20"),
-						extension.BatchMemory: resource.MustParse("40G"),
+						corev1.ResourceCPU:    resource.MustParse("20"),
+						corev1.ResourceMemory: resource.MustParse("40Gi"),
 					},
 					Capacity: corev1.ResourceList{
-						extension.BatchCPU:    resource.MustParse("20"),
-						extension.BatchMemory: resource.MustParse("40G"),
+						corev1.ResourceCPU:    resource.MustParse("20"),
+						corev1.ResourceMemory: resource.MustParse("40Gi"),
 					},
 				},
 			},
@@ -1742,11 +1782,11 @@ func Test_updateNodeResource(t *testing.T) {
 				Clock:           clock.RealClock{},
 			}
 			oldNodeCopy := tt.args.oldNode.DeepCopy()
-			if len(tt.fields.prepareNodeMetaSyncPlugin) > 0 {
-				framework.RegisterNodeMetaSyncExtender(framework.AllPass, tt.fields.prepareNodeMetaSyncPlugin...)
+			if len(tt.fields.prepareNodeMetaCheckPlugin) > 0 {
+				framework.RegisterNodeMetaCheckExtender(framework.AllPass, tt.fields.prepareNodeMetaCheckPlugin...)
 				defer func() {
-					for _, p := range tt.fields.prepareNodeMetaSyncPlugin {
-						framework.UnregisterNodeMetaSyncExtender(p.Name())
+					for _, p := range tt.fields.prepareNodeMetaCheckPlugin {
+						framework.UnregisterNodeMetaCheckExtender(p.Name())
 					}
 				}()
 			}
@@ -1772,11 +1812,11 @@ func Test_updateNodeResource(t *testing.T) {
 
 func Test_isNodeResourceSyncNeeded(t *testing.T) {
 	type fields struct {
-		SyncContext               *framework.SyncContext
-		prepareNodeMetaSyncPlugin []framework.NodeMetaSyncPlugin
+		SyncContext                *framework.SyncContext
+		prepareNodeMetaCheckPlugin []framework.NodeMetaCheckPlugin
 	}
 	type args struct {
-		strategy *extension.ColocationStrategy
+		strategy *configuration.ColocationStrategy
 		oldNode  *corev1.Node
 		newNode  *corev1.Node
 	}
@@ -1790,7 +1830,7 @@ func Test_isNodeResourceSyncNeeded(t *testing.T) {
 		{
 			name:   "cannot update an invalid new node",
 			fields: fields{SyncContext: &framework.SyncContext{}},
-			args:   args{strategy: &extension.ColocationStrategy{}},
+			args:   args{strategy: &configuration.ColocationStrategy{}},
 			want:   false,
 			want1:  false,
 		},
@@ -1802,7 +1842,7 @@ func Test_isNodeResourceSyncNeeded(t *testing.T) {
 				),
 			},
 			args: args{
-				strategy: &extension.ColocationStrategy{
+				strategy: &configuration.ColocationStrategy{
 					Enable:                        pointer.Bool(true),
 					CPUReclaimThresholdPercent:    pointer.Int64(65),
 					MemoryReclaimThresholdPercent: pointer.Int64(65),
@@ -1852,7 +1892,7 @@ func Test_isNodeResourceSyncNeeded(t *testing.T) {
 				),
 			},
 			args: args{
-				strategy: &extension.ColocationStrategy{
+				strategy: &configuration.ColocationStrategy{
 					Enable:                        pointer.Bool(true),
 					CPUReclaimThresholdPercent:    pointer.Int64(65),
 					MemoryReclaimThresholdPercent: pointer.Int64(65),
@@ -1902,7 +1942,7 @@ func Test_isNodeResourceSyncNeeded(t *testing.T) {
 				),
 			},
 			args: args{
-				strategy: &extension.ColocationStrategy{
+				strategy: &configuration.ColocationStrategy{
 					Enable:                        pointer.Bool(true),
 					CPUReclaimThresholdPercent:    pointer.Int64(65),
 					MemoryReclaimThresholdPercent: pointer.Int64(65),
@@ -1952,7 +1992,7 @@ func Test_isNodeResourceSyncNeeded(t *testing.T) {
 				),
 			},
 			args: args{
-				strategy: &extension.ColocationStrategy{
+				strategy: &configuration.ColocationStrategy{
 					Enable:                        pointer.Bool(true),
 					CPUReclaimThresholdPercent:    pointer.Int64(65),
 					MemoryReclaimThresholdPercent: pointer.Int64(65),
@@ -2001,14 +2041,14 @@ func Test_isNodeResourceSyncNeeded(t *testing.T) {
 				SyncContext: framework.NewSyncContext().WithContext(
 					map[string]time.Time{"/test-node0": time.Now()},
 				),
-				prepareNodeMetaSyncPlugin: []framework.NodeMetaSyncPlugin{
-					&fakeNodeMetaSyncPlugin{
+				prepareNodeMetaCheckPlugin: []framework.NodeMetaCheckPlugin{
+					&fakeNodeMetaCheckPlugin{
 						CheckLabels: []string{"expect-to-change-label"},
 					},
 				},
 			},
 			args: args{
-				strategy: &extension.ColocationStrategy{
+				strategy: &configuration.ColocationStrategy{
 					Enable:                        pointer.Bool(true),
 					CPUReclaimThresholdPercent:    pointer.Int64(65),
 					MemoryReclaimThresholdPercent: pointer.Int64(65),
@@ -2065,11 +2105,11 @@ func Test_isNodeResourceSyncNeeded(t *testing.T) {
 				NodeSyncContext: tt.fields.SyncContext,
 				Clock:           clock.RealClock{},
 			}
-			if len(tt.fields.prepareNodeMetaSyncPlugin) > 0 {
-				framework.RegisterNodeMetaSyncExtender(framework.AllPass, tt.fields.prepareNodeMetaSyncPlugin...)
+			if len(tt.fields.prepareNodeMetaCheckPlugin) > 0 {
+				framework.RegisterNodeMetaCheckExtender(framework.AllPass, tt.fields.prepareNodeMetaCheckPlugin...)
 				defer func() {
-					for _, p := range tt.fields.prepareNodeMetaSyncPlugin {
-						framework.UnregisterNodeMetaSyncExtender(p.Name())
+					for _, p := range tt.fields.prepareNodeMetaCheckPlugin {
+						framework.UnregisterNodeMetaCheckExtender(p.Name())
 					}
 				}()
 			}

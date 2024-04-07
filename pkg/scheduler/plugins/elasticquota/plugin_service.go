@@ -27,9 +27,10 @@ import (
 var _ services.APIServiceProvider = &Plugin{}
 
 func (g *Plugin) RegisterEndpoints(group *gin.RouterGroup) {
-	group.GET("/quota/:name", func(c *gin.Context) {
+	group.GET("/quotas/:name", func(c *gin.Context) {
 		quotaName := c.Param("name")
-		quotaSummary, exist := g.GetQuotaSummary(quotaName)
+		includePods := c.Query("includePods") == "true"
+		quotaSummary, exist := g.GetQuotaSummary(quotaName, includePods)
 		if !exist {
 			services.ResponseErrorMessage(c, http.StatusNotFound, "cannot find quota %s", quotaName)
 			return
@@ -37,7 +38,9 @@ func (g *Plugin) RegisterEndpoints(group *gin.RouterGroup) {
 		c.JSON(http.StatusOK, quotaSummary)
 	})
 	group.GET("/quotas", func(c *gin.Context) {
-		quotaSummaries := g.GetQuotaSummaries()
+		tree := c.Query("tree")
+		includePods := c.Query("includePods") == "true"
+		quotaSummaries := g.GetQuotaSummaries(tree, includePods)
 		c.JSON(http.StatusOK, quotaSummaries)
 	})
 }

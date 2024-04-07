@@ -23,7 +23,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"k8s.io/utils/pointer"
 
-	"github.com/koordinator-sh/koordinator/apis/extension"
+	"github.com/koordinator-sh/koordinator/apis/configuration"
 )
 
 type testExtensionsStruct struct {
@@ -43,11 +43,7 @@ func Test_registerDefaultColocationExtension(t *testing.T) {
 		configBytes, fmtErr := json.Marshal(defautlColocationCfg)
 		configStr := string(configBytes)
 
-		expectStr := "{\"enable\":false,\"metricAggregateDurationSeconds\":300,\"metricReportIntervalSeconds\":60," +
-			"\"metricAggregatePolicy\":{\"durations\":[\"5m0s\",\"10m0s\",\"30m0s\"]}," +
-			"\"cpuReclaimThresholdPercent\":60,\"memoryReclaimThresholdPercent\":65,\"memoryCalculatePolicy\":\"usage\"," +
-			"\"degradeTimeMinutes\":15,\"updateTimeThresholdSeconds\":300,\"resourceDiffThreshold\":0.1," +
-			"\"extensions\":{\"test-ext-key\":{\"testBoolVal\":true}}}"
+		expectStr := `{"enable":false,"metricAggregateDurationSeconds":300,"metricReportIntervalSeconds":60,"metricAggregatePolicy":{"durations":["5m0s","10m0s","30m0s"]},"metricMemoryCollectPolicy":"usageWithoutPageCache","cpuReclaimThresholdPercent":60,"cpuCalculatePolicy":"usage","memoryReclaimThresholdPercent":65,"memoryCalculatePolicy":"usage","degradeTimeMinutes":15,"updateTimeThresholdSeconds":300,"resourceDiffThreshold":0.1,"extensions":{"test-ext-key":{"testBoolVal":true}}}`
 		assert.Equal(t, expectStr, configStr, "config json")
 		assert.NoError(t, fmtErr, "default colocation config marshall")
 
@@ -81,17 +77,17 @@ func TestExtraFields_DeepCopy(t *testing.T) {
 	}
 	tests := []struct {
 		name string
-		in   extension.ExtraFields
-		want *extension.ExtraFields
+		in   configuration.ExtraFields
+		want *configuration.ExtraFields
 	}{
 		{
 			name: "deep copy struct",
-			in: extension.ExtraFields{
+			in: configuration.ExtraFields{
 				"test-ext-key": &testExtStruct{
 					TestBoolVal: pointer.Bool(true),
 				},
 			},
-			want: &extension.ExtraFields{
+			want: &configuration.ExtraFields{
 				"test-ext-key": &testExtStruct{
 					TestBoolVal: pointer.Bool(true),
 				},

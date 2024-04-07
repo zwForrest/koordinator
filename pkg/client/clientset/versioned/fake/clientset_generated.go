@@ -20,8 +20,12 @@ package fake
 
 import (
 	clientset "github.com/koordinator-sh/koordinator/pkg/client/clientset/versioned"
+	analysisv1alpha1 "github.com/koordinator-sh/koordinator/pkg/client/clientset/versioned/typed/analysis/v1alpha1"
+	fakeanalysisv1alpha1 "github.com/koordinator-sh/koordinator/pkg/client/clientset/versioned/typed/analysis/v1alpha1/fake"
 	configv1alpha1 "github.com/koordinator-sh/koordinator/pkg/client/clientset/versioned/typed/config/v1alpha1"
 	fakeconfigv1alpha1 "github.com/koordinator-sh/koordinator/pkg/client/clientset/versioned/typed/config/v1alpha1/fake"
+	quotav1alpha1 "github.com/koordinator-sh/koordinator/pkg/client/clientset/versioned/typed/quota/v1alpha1"
+	fakequotav1alpha1 "github.com/koordinator-sh/koordinator/pkg/client/clientset/versioned/typed/quota/v1alpha1/fake"
 	schedulingv1alpha1 "github.com/koordinator-sh/koordinator/pkg/client/clientset/versioned/typed/scheduling/v1alpha1"
 	fakeschedulingv1alpha1 "github.com/koordinator-sh/koordinator/pkg/client/clientset/versioned/typed/scheduling/v1alpha1/fake"
 	slov1alpha1 "github.com/koordinator-sh/koordinator/pkg/client/clientset/versioned/typed/slo/v1alpha1"
@@ -83,9 +87,19 @@ var (
 	_ testing.FakeClient  = &Clientset{}
 )
 
+// AnalysisV1alpha1 retrieves the AnalysisV1alpha1Client
+func (c *Clientset) AnalysisV1alpha1() analysisv1alpha1.AnalysisV1alpha1Interface {
+	return &fakeanalysisv1alpha1.FakeAnalysisV1alpha1{Fake: &c.Fake}
+}
+
 // ConfigV1alpha1 retrieves the ConfigV1alpha1Client
 func (c *Clientset) ConfigV1alpha1() configv1alpha1.ConfigV1alpha1Interface {
 	return &fakeconfigv1alpha1.FakeConfigV1alpha1{Fake: &c.Fake}
+}
+
+// QuotaV1alpha1 retrieves the QuotaV1alpha1Client
+func (c *Clientset) QuotaV1alpha1() quotav1alpha1.QuotaV1alpha1Interface {
+	return &fakequotav1alpha1.FakeQuotaV1alpha1{Fake: &c.Fake}
 }
 
 // SchedulingV1alpha1 retrieves the SchedulingV1alpha1Client

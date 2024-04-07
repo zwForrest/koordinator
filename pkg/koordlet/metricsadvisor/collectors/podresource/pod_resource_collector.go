@@ -50,6 +50,7 @@ type podResourceCollector struct {
 	lastContainerCPUStat *gocache.Cache
 
 	deviceCollectors map[string]framework.DeviceCollector
+	sharedState      *framework.SharedState
 }
 
 func New(opt *framework.Options) framework.Collector {
@@ -78,6 +79,7 @@ func (p *podResourceCollector) Enabled() bool {
 
 func (p *podResourceCollector) Setup(c *framework.Context) {
 	p.deviceCollectors = c.DeviceCollectors
+	p.sharedState = c.State
 }
 
 func (p *podResourceCollector) Run(stopCh <-chan struct{}) {
@@ -104,6 +106,8 @@ func (p *podResourceCollector) collectPodResUsed() {
 	podMetas := p.statesInformer.GetAllPods()
 	count := 0
 	metrics := make([]metriccache.MetricSample, 0)
+	allCPUUsageCores := metriccache.Point{Timestamp: time.Now(), Value: 0}
+	allMemoryUsage := metriccache.Point{Timestamp: time.Now(), Value: 0}
 	for _, meta := range podMetas {
 		pod := meta.Pod
 		uid := string(pod.UID) // types.UID
@@ -160,6 +164,11 @@ func (p *podResourceCollector) collectPodResUsed() {
 
 		metrics = append(metrics, cpuUsageMetric, memUsageMetric)
 		for deviceName, deviceCollector := range p.deviceCollectors {
+			if !deviceCollector.Enabled() {
+				klog.V(6).Infof("skip pod metrics from the disabled device collector %s, pod %s", deviceName, podKey)
+				continue
+			}
+
 			if deviceMetrics, err := deviceCollector.GetPodMetric(uid, meta.CgroupDir, pod.Status.ContainerStatuses); err != nil {
 				klog.V(4).Infof("get pod %s device usage failed for %v, error: %v", podKey, deviceName, err)
 			} else if len(metrics) > 0 {
@@ -170,6 +179,8 @@ func (p *podResourceCollector) collectPodResUsed() {
 		klog.V(6).Infof("collect pod %s, uid %s finished, metric %+v", podKey, pod.UID, metrics)
 
 		count++
+		allCPUUsageCores.Value += cpuUsageValue
+		allMemoryUsage.Value += float64(memUsageValue)
 		containerMetrics := p.collectContainerResUsed(meta)
 		metrics = append(metrics, containerMetrics...)
 	}
@@ -184,6 +195,8 @@ func (p *podResourceCollector) collectPodResUsed() {
 		klog.Warningf("Commit pod metrics failed, error: %v", err)
 		return
 	}
+
+	p.sharedState.UpdatePodUsage(CollectorName, allCPUUsageCores, allMemoryUsage)
 
 	// update collect time
 	p.started.Store(true)
@@ -254,6 +267,11 @@ func (p *podResourceCollector) collectContainerResUsed(meta *statesinformer.PodM
 		containerMetrics = append(containerMetrics, cpuUsageMetric, memUsageMetric)
 
 		for deviceName, deviceCollector := range p.deviceCollectors {
+			if !deviceCollector.Enabled() {
+				klog.V(6).Infof("skip container metrics from the disabled device collector %s, container %s", deviceName, containerKey)
+				continue
+			}
+
 			if metrics, err := deviceCollector.GetContainerMetric(containerStat.ContainerID, meta.CgroupDir, containerStat); err != nil {
 				klog.Warningf("get container %s device usage failed for %v, error: %v", containerKey, deviceName, err)
 			} else {

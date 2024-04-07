@@ -34,14 +34,18 @@ import (
 )
 
 const (
-	defaultMigrationControllerMaxConcurrentReconciles = 1
+	defaultMigrationControllerMaxConcurrentReconciles       = 1
+	defaultNodeMetricExpirationSeconds                int64 = 180
 
-	defaultMaxMigratingPerNode        = 2
-	defaultMigrationJobMode           = sev1alpha1.PodMigrationJobModeReservationFirst
-	defaultMigrationJobTTL            = 5 * time.Minute
-	defaultMigrationJobEvictionPolicy = migrationevictor.NativeEvictorName
-	defaultMigrationEvictQPS          = 10
-	defaultMigrationEvictBurst        = 1
+	defaultMaxMigratingPerNode         = 2
+	defaultMigrationJobMode            = sev1alpha1.PodMigrationJobModeReservationFirst
+	defaultMigrationJobTTL             = 5 * time.Minute
+	defaultMigrationJobEvictionPolicy  = migrationevictor.NativeEvictorName
+	defaultMigrationEvictQPS           = 10
+	defaultMigrationEvictBurst         = 1
+	defaultSchedulerSupportReservation = "koord-scheduler"
+	defaultArbitrationInterval         = 500 * time.Millisecond
+	defaultDetectorCacheTimeout        = 5 * time.Minute
 )
 
 var (
@@ -218,6 +222,10 @@ func SetDefaults_MigrationControllerArgs(obj *MigrationControllerArgs) {
 	if obj.DefaultJobMode == "" {
 		obj.DefaultJobMode = string(defaultMigrationJobMode)
 	}
+
+	if len(obj.SchedulerNames) == 0 {
+		obj.SchedulerNames = []string{defaultSchedulerSupportReservation}
+	}
 	if obj.DefaultJobTTL == nil {
 		obj.DefaultJobTTL = &metav1.Duration{Duration: defaultMigrationJobTTL}
 	}
@@ -236,6 +244,15 @@ func SetDefaults_MigrationControllerArgs(obj *MigrationControllerArgs) {
 	if len(obj.ObjectLimiters) == 0 {
 		obj.ObjectLimiters = defaultObjectLimiters
 	}
+	if obj.ArbitrationArgs == nil {
+		obj.ArbitrationArgs = &ArbitrationArgs{
+			Enabled:  true,
+			Interval: &metav1.Duration{Duration: defaultArbitrationInterval},
+		}
+	}
+	if obj.ArbitrationArgs.Interval == nil {
+		obj.ArbitrationArgs.Interval = &metav1.Duration{Duration: defaultArbitrationInterval}
+	}
 }
 
 func SetDefaults_LowNodeLoadArgs(obj *LowNodeLoadArgs) {
@@ -246,6 +263,13 @@ func SetDefaults_LowNodeLoadArgs(obj *LowNodeLoadArgs) {
 		obj.AnomalyCondition = defaultLoadAnomalyCondition
 	} else if obj.AnomalyCondition.ConsecutiveAbnormalities == 0 {
 		obj.AnomalyCondition.ConsecutiveAbnormalities = defaultLoadAnomalyCondition.ConsecutiveAbnormalities
+	}
+	if obj.DetectorCacheTimeout == nil {
+		obj.DetectorCacheTimeout = &metav1.Duration{Duration: defaultDetectorCacheTimeout}
+	}
+
+	if obj.NodeMetricExpirationSeconds == nil {
+		obj.NodeMetricExpirationSeconds = pointer.Int64(defaultNodeMetricExpirationSeconds)
 	}
 
 	defaultResourceWeights := map[corev1.ResourceName]int64{

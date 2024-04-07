@@ -19,7 +19,7 @@ package metrics
 import "github.com/prometheus/client_golang/prometheus"
 
 func init() {
-	MustRegister(CommonCollectors...)
+	InternalMustRegister(CommonCollectors...)
 }
 
 var (
@@ -71,7 +71,7 @@ func RecordNodeMetricReconcileCount(isSucceeded bool, reason string) {
 }
 
 func RecordNodeMetricSpecParseCount(isSucceeded bool, reason string) {
-	recordNodeCountMetric(NodeSLOSpecParseCount, isSucceeded, reason)
+	recordNodeCountMetric(NodeMetricSpecParseCount, isSucceeded, reason)
 }
 
 func RecordNodeSLOReconcileCount(isSucceeded bool, reason string) {

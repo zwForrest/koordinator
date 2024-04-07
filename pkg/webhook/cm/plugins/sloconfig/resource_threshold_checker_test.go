@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package sloconfig
 
 import (
@@ -26,13 +27,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/pointer"
 
-	"github.com/koordinator-sh/koordinator/apis/extension"
+	"github.com/koordinator-sh/koordinator/apis/configuration"
 	slov1alpha1 "github.com/koordinator-sh/koordinator/apis/slo/v1alpha1"
 )
 
 func Test_ResourceThreshold_NewChecker_InitStatus(t *testing.T) {
 	//clusterOnly
-	cfgClusterOnly := &extension.ResourceThresholdCfg{
+	cfgClusterOnly := &configuration.ResourceThresholdCfg{
 		ClusterStrategy: &slov1alpha1.ResourceThresholdStrategy{
 			Enable:                      pointer.Bool(true),
 			CPUSuppressThresholdPercent: pointer.Int64(60),
@@ -40,14 +41,14 @@ func Test_ResourceThreshold_NewChecker_InitStatus(t *testing.T) {
 	}
 	cfgClusterOnlyBytes, _ := json.Marshal(cfgClusterOnly)
 	//nodeSelector is empty
-	cfgHaveNodeInvalid := &extension.ResourceThresholdCfg{
+	cfgHaveNodeInvalid := &configuration.ResourceThresholdCfg{
 		ClusterStrategy: &slov1alpha1.ResourceThresholdStrategy{
 			Enable:                      pointer.Bool(true),
 			CPUSuppressThresholdPercent: pointer.Int64(60),
 		},
-		NodeStrategies: []extension.NodeResourceThresholdStrategy{
+		NodeStrategies: []configuration.NodeResourceThresholdStrategy{
 			{
-				NodeCfgProfile: extension.NodeCfgProfile{
+				NodeCfgProfile: configuration.NodeCfgProfile{
 					Name: "xxx-yyy",
 				},
 				ResourceThresholdStrategy: &slov1alpha1.ResourceThresholdStrategy{
@@ -60,14 +61,14 @@ func Test_ResourceThreshold_NewChecker_InitStatus(t *testing.T) {
 	cfgHaveNodeInvalidBytes, _ := json.Marshal(cfgHaveNodeInvalid)
 
 	//valid node config
-	cfgHaveNodeValid := &extension.ResourceThresholdCfg{
+	cfgHaveNodeValid := &configuration.ResourceThresholdCfg{
 		ClusterStrategy: &slov1alpha1.ResourceThresholdStrategy{
 			Enable:                      pointer.Bool(true),
 			CPUSuppressThresholdPercent: pointer.Int64(60),
 		},
-		NodeStrategies: []extension.NodeResourceThresholdStrategy{
+		NodeStrategies: []configuration.NodeResourceThresholdStrategy{
 			{
-				NodeCfgProfile: extension.NodeCfgProfile{
+				NodeCfgProfile: configuration.NodeCfgProfile{
 					Name: "xxx-yyy",
 					NodeSelector: &metav1.LabelSelector{
 						MatchLabels: map[string]string{
@@ -94,7 +95,7 @@ func Test_ResourceThreshold_NewChecker_InitStatus(t *testing.T) {
 	tests := []struct {
 		name               string
 		args               args
-		wantCfg            *extension.ResourceThresholdCfg
+		wantCfg            *configuration.ResourceThresholdCfg
 		wantProfileChecker NodeConfigProfileChecker
 		wantStatus         string
 	}{
@@ -126,7 +127,7 @@ func Test_ResourceThreshold_NewChecker_InitStatus(t *testing.T) {
 			args: args{
 				configMap: &corev1.ConfigMap{
 					Data: map[string]string{
-						extension.ResourceThresholdConfigKey: "invalid config",
+						configuration.ResourceThresholdConfigKey: "invalid config",
 					},
 				},
 			},
@@ -139,12 +140,12 @@ func Test_ResourceThreshold_NewChecker_InitStatus(t *testing.T) {
 			args: args{
 				oldConfigMap: &corev1.ConfigMap{
 					Data: map[string]string{
-						extension.ResourceThresholdConfigKey: "invalid config",
+						configuration.ResourceThresholdConfigKey: "invalid config",
 					},
 				},
 				configMap: &corev1.ConfigMap{
 					Data: map[string]string{
-						extension.ResourceThresholdConfigKey: "invalid config",
+						configuration.ResourceThresholdConfigKey: "invalid config",
 					},
 				},
 			},
@@ -157,12 +158,12 @@ func Test_ResourceThreshold_NewChecker_InitStatus(t *testing.T) {
 			args: args{
 				configMap: &corev1.ConfigMap{
 					Data: map[string]string{
-						extension.ResourceThresholdConfigKey: string(cfgClusterOnlyBytes),
+						configuration.ResourceThresholdConfigKey: string(cfgClusterOnlyBytes),
 					},
 				},
 			},
 			wantCfg:            cfgClusterOnly,
-			wantProfileChecker: &nodeConfigProfileChecker{cfgName: extension.ResourceThresholdConfigKey},
+			wantProfileChecker: &nodeConfigProfileChecker{cfgName: configuration.ResourceThresholdConfigKey},
 			wantStatus:         InitSuccess,
 		},
 		{
@@ -170,7 +171,7 @@ func Test_ResourceThreshold_NewChecker_InitStatus(t *testing.T) {
 			args: args{
 				configMap: &corev1.ConfigMap{
 					Data: map[string]string{
-						extension.ResourceThresholdConfigKey: string(cfgHaveNodeInvalidBytes),
+						configuration.ResourceThresholdConfigKey: string(cfgHaveNodeInvalidBytes),
 					},
 				},
 			},
@@ -183,13 +184,13 @@ func Test_ResourceThreshold_NewChecker_InitStatus(t *testing.T) {
 			args: args{
 				configMap: &corev1.ConfigMap{
 					Data: map[string]string{
-						extension.ResourceThresholdConfigKey: string(cfgHaveNodeValidBytes),
+						configuration.ResourceThresholdConfigKey: string(cfgHaveNodeValidBytes),
 					},
 				},
 			},
 			wantCfg: cfgHaveNodeValid,
 			wantProfileChecker: &nodeConfigProfileChecker{
-				cfgName: extension.ResourceThresholdConfigKey,
+				cfgName: configuration.ResourceThresholdConfigKey,
 				nodeConfigs: []profileCheckInfo{
 					{
 						profile:   cfgHaveNodeValid.NodeStrategies[0].NodeCfgProfile,
@@ -215,7 +216,7 @@ func Test_ResourceThreshold_NewChecker_InitStatus(t *testing.T) {
 func Test_ResourceThreshold_ConfigContentsValid(t *testing.T) {
 
 	type args struct {
-		cfg extension.ResourceThresholdCfg
+		cfg configuration.ResourceThresholdCfg
 	}
 
 	tests := []struct {
@@ -226,7 +227,7 @@ func Test_ResourceThreshold_ConfigContentsValid(t *testing.T) {
 		{
 			name: "cluster CPUSuppressThresholdPercent invalid",
 			args: args{
-				cfg: extension.ResourceThresholdCfg{
+				cfg: configuration.ResourceThresholdCfg{
 					ClusterStrategy: &slov1alpha1.ResourceThresholdStrategy{
 						Enable:                      pointer.Bool(true),
 						CPUSuppressThresholdPercent: pointer.Int64(-1),
@@ -238,7 +239,7 @@ func Test_ResourceThreshold_ConfigContentsValid(t *testing.T) {
 		{
 			name: "cluster CPUEvictBESatisfactionUpperPercent invalid",
 			args: args{
-				cfg: extension.ResourceThresholdCfg{
+				cfg: configuration.ResourceThresholdCfg{
 					ClusterStrategy: &slov1alpha1.ResourceThresholdStrategy{
 						CPUEvictBESatisfactionUpperPercent: pointer.Int64(102),
 					},
@@ -249,7 +250,7 @@ func Test_ResourceThreshold_ConfigContentsValid(t *testing.T) {
 		{
 			name: "cluster CPUEvictBESatisfactionUpperPercent invalid, upper must not nil when  lower not nil",
 			args: args{
-				cfg: extension.ResourceThresholdCfg{
+				cfg: configuration.ResourceThresholdCfg{
 					ClusterStrategy: &slov1alpha1.ResourceThresholdStrategy{
 						CPUEvictBESatisfactionLowerPercent: pointer.Int64(35),
 					},
@@ -260,7 +261,7 @@ func Test_ResourceThreshold_ConfigContentsValid(t *testing.T) {
 		{
 			name: "cluster CPUEvictBESatisfactionPercent invalid, upper <  lower",
 			args: args{
-				cfg: extension.ResourceThresholdCfg{
+				cfg: configuration.ResourceThresholdCfg{
 					ClusterStrategy: &slov1alpha1.ResourceThresholdStrategy{
 						CPUEvictBESatisfactionUpperPercent: pointer.Int64(22),
 						CPUEvictBESatisfactionLowerPercent: pointer.Int64(35),
@@ -272,11 +273,11 @@ func Test_ResourceThreshold_ConfigContentsValid(t *testing.T) {
 		{
 			name: "all is nil",
 			args: args{
-				cfg: extension.ResourceThresholdCfg{
+				cfg: configuration.ResourceThresholdCfg{
 					ClusterStrategy: &slov1alpha1.ResourceThresholdStrategy{},
-					NodeStrategies: []extension.NodeResourceThresholdStrategy{
+					NodeStrategies: []configuration.NodeResourceThresholdStrategy{
 						{
-							NodeCfgProfile: extension.NodeCfgProfile{
+							NodeCfgProfile: configuration.NodeCfgProfile{
 								Name: "xxx-yyy",
 							},
 							ResourceThresholdStrategy: &slov1alpha1.ResourceThresholdStrategy{},
@@ -289,14 +290,14 @@ func Test_ResourceThreshold_ConfigContentsValid(t *testing.T) {
 		{
 			name: "config valid",
 			args: args{
-				cfg: extension.ResourceThresholdCfg{
+				cfg: configuration.ResourceThresholdCfg{
 					ClusterStrategy: &slov1alpha1.ResourceThresholdStrategy{
 						Enable:                      pointer.Bool(true),
 						CPUSuppressThresholdPercent: pointer.Int64(60),
 					},
-					NodeStrategies: []extension.NodeResourceThresholdStrategy{
+					NodeStrategies: []configuration.NodeResourceThresholdStrategy{
 						{
-							NodeCfgProfile: extension.NodeCfgProfile{
+							NodeCfgProfile: configuration.NodeCfgProfile{
 								Name: "xxx-yyy",
 								NodeSelector: &metav1.LabelSelector{
 									MatchLabels: map[string]string{

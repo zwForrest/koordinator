@@ -19,12 +19,12 @@ package impl
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/golang/mock/gomock"
 	faketopologyclientset "github.com/k8stopologyawareschedwg/noderesourcetopology-api/pkg/generated/clientset/versioned/fake"
-
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -47,6 +47,7 @@ import (
 	"github.com/koordinator-sh/koordinator/pkg/koordlet/prediction"
 	"github.com/koordinator-sh/koordinator/pkg/koordlet/statesinformer"
 	"github.com/koordinator-sh/koordinator/pkg/koordlet/util"
+	"github.com/koordinator-sh/koordinator/pkg/koordlet/util/system"
 )
 
 var _ listerv1alpha1.NodeMetricLister = &fakeNodeMetricLister{}
@@ -168,16 +169,18 @@ func Test_reporter_sync_with_single_node_metric(t *testing.T) {
 		nodeMetric       *slov1alpha1.NodeMetric
 		metricCache      func(ctrl *gomock.Controller) metriccache.MetricCache
 		podsInformer     *podsInformer
+		nodeSLOInformer  *nodeSLOInformer
 		nodeMetricLister listerv1alpha1.NodeMetricLister
 		nodeMetricClient clientsetv1alpha1.NodeMetricInterface
 	}
 	tests := []struct {
-		name             string
-		fields           fields
-		wantNilStatus    bool
-		wantNodeResource slov1alpha1.ResourceMap
-		wantPodsMetric   []*slov1alpha1.PodMetricInfo
-		wantErr          bool
+		name               string
+		fields             fields
+		wantNilStatus      bool
+		wantNodeResource   slov1alpha1.ResourceMap
+		wantSystemResource slov1alpha1.ResourceMap
+		wantPodsMetric     []*slov1alpha1.PodMetricInfo
+		wantErr            bool
 	}{
 		{
 			name: "nodeMetric not initialized",
@@ -188,14 +191,16 @@ func Test_reporter_sync_with_single_node_metric(t *testing.T) {
 					return nil
 				},
 				podsInformer:     NewPodsInformer(),
+				nodeSLOInformer:  NewNodeSLOInformer(),
 				nodeMetricLister: nil,
 				nodeMetricClient: &fakeNodeMetricClient{},
 			},
 
-			wantNilStatus:    true,
-			wantNodeResource: slov1alpha1.ResourceMap{},
-			wantPodsMetric:   nil,
-			wantErr:          true,
+			wantNilStatus:      true,
+			wantNodeResource:   slov1alpha1.ResourceMap{},
+			wantSystemResource: slov1alpha1.ResourceMap{},
+			wantPodsMetric:     nil,
+			wantErr:            true,
 		},
 		{
 			name: "successfully report nodeMetric",
@@ -215,6 +220,7 @@ func Test_reporter_sync_with_single_node_metric(t *testing.T) {
 									},
 								},
 							},
+							NodeMemoryCollectPolicy: defaultNodeMetricSpec.CollectPolicy.NodeMemoryCollectPolicy,
 						},
 					},
 				},
@@ -229,11 +235,19 @@ func Test_reporter_sync_with_single_node_metric(t *testing.T) {
 					duration := endTime.Sub(startTime)
 					cpuQueryMeta, err := metriccache.NodeCPUUsageMetric.BuildQueryMeta(nil)
 					assert.NoError(t, err)
-					buildMockQueryResult(ctrl, mockQuerier, mockResultFactory, cpuQueryMeta, 1, duration)
+					buildMockQueryResult(ctrl, mockQuerier, mockResultFactory, cpuQueryMeta, 3, duration)
 
 					memQueryMeta, err := metriccache.NodeMemoryUsageMetric.BuildQueryMeta(nil)
 					assert.NoError(t, err)
-					buildMockQueryResult(ctrl, mockQuerier, mockResultFactory, memQueryMeta, 1*1024*1024*1024, duration)
+					buildMockQueryResult(ctrl, mockQuerier, mockResultFactory, memQueryMeta, 3*1024*1024*1024, duration)
+
+					sysCPUQueryMeta, err := metriccache.SystemCPUUsageMetric.BuildQueryMeta(nil)
+					assert.NoError(t, err)
+					buildMockQueryResult(ctrl, mockQuerier, mockResultFactory, sysCPUQueryMeta, 2, duration)
+
+					sysMemQueryMeta, err := metriccache.SystemMemoryUsageMetric.BuildQueryMeta(nil)
+					assert.NoError(t, err)
+					buildMockQueryResult(ctrl, mockQuerier, mockResultFactory, sysMemQueryMeta, 2*1024*1024*1024, duration)
 
 					mockMetricCache.EXPECT().Get(gomock.Any()).Return(util.GPUDevices{
 						{UUID: "1", Minor: 0, MemoryTotal: 100},
@@ -294,8 +308,16 @@ func Test_reporter_sync_with_single_node_metric(t *testing.T) {
 									Namespace: "default",
 									UID:       "test-pod",
 								},
+								Status: v1.PodStatus{
+									QOSClass: v1.PodQOSBurstable,
+								},
 							},
 						},
+					},
+				},
+				nodeSLOInformer: &nodeSLOInformer{
+					nodeSLO: &slov1alpha1.NodeSLO{
+						Spec: slov1alpha1.NodeSLOSpec{},
 					},
 				},
 				nodeMetricLister: &fakeNodeMetricLister{
@@ -318,8 +340,8 @@ func Test_reporter_sync_with_single_node_metric(t *testing.T) {
 			wantNilStatus: false,
 			wantNodeResource: slov1alpha1.ResourceMap{
 				ResourceList: v1.ResourceList{
-					v1.ResourceCPU:    *resource.NewMilliQuantity(1000, resource.DecimalSI),
-					v1.ResourceMemory: *resource.NewQuantity(1*1024*1024*1024, resource.BinarySI),
+					v1.ResourceCPU:    *resource.NewMilliQuantity(3000, resource.DecimalSI),
+					v1.ResourceMemory: *resource.NewQuantity(3*1024*1024*1024, resource.BinarySI),
 				},
 				Devices: []schedulingv1alpha1.DeviceInfo{
 					{UUID: "1", Minor: pointer.Int32(0), Type: schedulingv1alpha1.GPU, Resources: map[v1.ResourceName]resource.Quantity{
@@ -334,10 +356,18 @@ func Test_reporter_sync_with_single_node_metric(t *testing.T) {
 					}},
 				},
 			},
+			wantSystemResource: slov1alpha1.ResourceMap{
+				ResourceList: v1.ResourceList{
+					v1.ResourceCPU:    *resource.NewMilliQuantity(2000, resource.DecimalSI),
+					v1.ResourceMemory: *resource.NewQuantity(2*1024*1024*1024, resource.BinarySI),
+				},
+			},
 			wantPodsMetric: []*slov1alpha1.PodMetricInfo{
 				{
 					Name:      "test-pod",
 					Namespace: "default",
+					Priority:  apiext.PriorityProd,
+					QoS:       apiext.QoSLS,
 					PodUsage: slov1alpha1.ResourceMap{
 						ResourceList: v1.ResourceList{
 							v1.ResourceCPU:    *resource.NewMilliQuantity(1000, resource.DecimalSI),
@@ -377,17 +407,32 @@ func Test_reporter_sync_with_single_node_metric(t *testing.T) {
 					mockQuerier := mockmetriccache.NewMockQuerier(ctrl)
 					c.EXPECT().Querier(gomock.Any(), gomock.Any()).Return(mockQuerier, nil).AnyTimes()
 
+					duration := endTime.Sub(startTime)
 					cpuQueryMeta, err := metriccache.NodeCPUUsageMetric.BuildQueryMeta(nil)
 					assert.NoError(t, err)
-					buildMockQueryResult(ctrl, mockQuerier, mockResultFactory, cpuQueryMeta, 1000, endTime.Sub(startTime))
+					buildMockQueryResult(ctrl, mockQuerier, mockResultFactory, cpuQueryMeta, 2000, duration)
 
 					memQueryMeta, err := metriccache.NodeMemoryUsageMetric.BuildQueryMeta(nil)
 					assert.NoError(t, err)
-					buildMockQueryResult(ctrl, mockQuerier, mockResultFactory, memQueryMeta, 1*1024*1024*1024, endTime.Sub(startTime))
+					buildMockQueryResult(ctrl, mockQuerier, mockResultFactory, memQueryMeta, 2*1024*1024*1024, duration)
+
+					sysCPUQueryMeta, err := metriccache.SystemCPUUsageMetric.BuildQueryMeta(nil)
+					assert.NoError(t, err)
+					buildMockQueryResult(ctrl, mockQuerier, mockResultFactory, sysCPUQueryMeta, 2, duration)
+
+					sysMemQueryMeta, err := metriccache.SystemMemoryUsageMetric.BuildQueryMeta(nil)
+					assert.NoError(t, err)
+					buildMockQueryResult(ctrl, mockQuerier, mockResultFactory, sysMemQueryMeta, 2*1024*1024*1024, duration)
+
 					c.EXPECT().Get(gomock.Any()).Return(nil, false).AnyTimes()
 					return c
 				},
 				podsInformer: NewPodsInformer(),
+				nodeSLOInformer: &nodeSLOInformer{
+					nodeSLO: &slov1alpha1.NodeSLO{
+						Spec: slov1alpha1.NodeSLOSpec{},
+					},
+				},
 				nodeMetricLister: &fakeNodeMetricLister{
 					nodeMetrics: &slov1alpha1.NodeMetric{
 						ObjectMeta: metav1.ObjectMeta{
@@ -421,6 +466,7 @@ func Test_reporter_sync_with_single_node_metric(t *testing.T) {
 				nodeMetric:       tt.fields.nodeMetric,
 				metricCache:      tt.fields.metricCache(ctrl),
 				podsInformer:     tt.fields.podsInformer,
+				nodeSLOInformer:  tt.fields.nodeSLOInformer,
 				nodeMetricLister: tt.fields.nodeMetricLister,
 				statusUpdater:    newStatusUpdater(tt.fields.nodeMetricClient),
 				predictorFactory: prediction.NewEmptyPredictorFactory(),
@@ -437,6 +483,7 @@ func Test_reporter_sync_with_single_node_metric(t *testing.T) {
 					assert.Nil(t, nodeMetric.Status.PodsMetric)
 				} else {
 					assert.Equal(t, tt.wantNodeResource, nodeMetric.Status.NodeMetric.NodeUsage)
+					assert.Equal(t, tt.wantSystemResource, nodeMetric.Status.NodeMetric.SystemUsage)
 					assert.Equal(t, tt.wantPodsMetric, nodeMetric.Status.PodsMetric)
 				}
 			}
@@ -526,6 +573,7 @@ func Test_nodeMetricInformer_collectNodeAggregateMetric(t *testing.T) {
 									{Duration: 5 * time.Minute},
 								},
 							},
+							NodeMemoryCollectPolicy: defaultNodeMetricSpec.CollectPolicy.NodeMemoryCollectPolicy,
 						},
 					},
 				},
@@ -534,11 +582,11 @@ func Test_nodeMetricInformer_collectNodeAggregateMetric(t *testing.T) {
 				NodeUsage: tt.fields.nodeResultAVG,
 				AggregatedNodeUsages: []slov1alpha1.AggregatedUsage{
 					{
-						Usage: map[slov1alpha1.AggregationType]slov1alpha1.ResourceMap{
-							slov1alpha1.P50: tt.fields.nodeResultP50,
-							slov1alpha1.P90: tt.fields.nodeResultP90,
-							slov1alpha1.P95: tt.fields.nodeResultP95,
-							slov1alpha1.P99: tt.fields.nodeResultP99,
+						Usage: map[apiext.AggregationType]slov1alpha1.ResourceMap{
+							apiext.P50: tt.fields.nodeResultP50,
+							apiext.P90: tt.fields.nodeResultP90,
+							apiext.P95: tt.fields.nodeResultP95,
+							apiext.P99: tt.fields.nodeResultP99,
 						},
 						Duration: metav1.Duration{
 							Duration: end.Sub(start),
@@ -614,6 +662,7 @@ func Test_nodeMetricInformer_updateMetricSpec(t *testing.T) {
 					AggregateDurationSeconds: defaultNodeMetricSpec.CollectPolicy.AggregateDurationSeconds,
 					ReportIntervalSeconds:    pointer.Int64(180),
 					NodeAggregatePolicy:      defaultNodeMetricSpec.CollectPolicy.NodeAggregatePolicy,
+					NodeMemoryCollectPolicy:  defaultNodeMetricSpec.CollectPolicy.NodeMemoryCollectPolicy,
 				},
 			},
 		},
@@ -653,7 +702,8 @@ func Test_nodeMetricInformer_NewAndSetup(t *testing.T) {
 				state: &PluginState{
 					metricCache: mockmetriccache.NewMockMetricCache(ctrl),
 					informerPlugins: map[PluginName]informerPlugin{
-						podsInformerName: NewPodsInformer(),
+						podsInformerName:    NewPodsInformer(),
+						nodeSLOInformerName: NewNodeSLOInformer(),
 					},
 				},
 			},
@@ -662,7 +712,9 @@ func Test_nodeMetricInformer_NewAndSetup(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := NewNodeMetricInformer()
-			r.Setup(tt.args.ctx, tt.args.state)
+			assert.NotPanics(t, func() {
+				r.Setup(tt.args.ctx, tt.args.state)
+			})
 		})
 	}
 }
@@ -686,7 +738,9 @@ func Test_metricsInColdStart(t *testing.T) {
 		{
 			name: "metric in cold start",
 			args: args{
-				duration: queryEnd.Sub(shortStart),
+				queryStart: queryStart,
+				queryEnd:   queryEnd,
+				duration:   queryEnd.Sub(shortStart),
 			},
 			want: true,
 		},
@@ -799,6 +853,404 @@ func Test_nodeMetricInformer_collectNodeMetric(t *testing.T) {
 	startTime := now.Add(-time.Second * 120)
 
 	type args struct {
+		queryparam          metriccache.QueryParam
+		memoryCollectPolicy slov1alpha1.NodeMemoryCollectPolicy
+	}
+	type samples struct {
+		CPUUsed float64
+		MemUsed float64
+	}
+	tests := []struct {
+		name    string
+		args    args
+		samples samples
+		want    v1.ResourceList
+		want1   time.Duration
+	}{
+		{
+			name: "test-1 report usageWithoutPageCache",
+			args: args{
+				queryparam:          metriccache.QueryParam{Start: &startTime, End: &now, Aggregate: metriccache.AggregationTypeAVG},
+				memoryCollectPolicy: "usageWithoutPageCache",
+			},
+			samples: samples{
+				CPUUsed: 2,
+				MemUsed: 10 * 1024 * 1024 * 1024,
+			},
+			want: v1.ResourceList{
+				v1.ResourceCPU:    *resource.NewMilliQuantity(2000, resource.DecimalSI),
+				v1.ResourceMemory: *resource.NewQuantity(10*1024*1024*1024, resource.BinarySI),
+			},
+			want1: now.Sub(startTime),
+		},
+		{
+			name: "test-2 report usageWithHotPageCache",
+			args: args{
+				queryparam:          metriccache.QueryParam{Start: &startTime, End: &now, Aggregate: metriccache.AggregationTypeAVG},
+				memoryCollectPolicy: "usageWithHotPageCache",
+			},
+			samples: samples{
+				CPUUsed: 2,
+				MemUsed: 10 * 1024 * 1024 * 1024,
+			},
+			want: v1.ResourceList{
+				v1.ResourceCPU:    *resource.NewMilliQuantity(2000, resource.DecimalSI),
+				v1.ResourceMemory: *resource.NewQuantity(10*1024*1024*1024, resource.BinarySI),
+			},
+			want1: now.Sub(startTime),
+		},
+		{
+			name: "test-3 report usageWithPageCache",
+			args: args{
+				queryparam:          metriccache.QueryParam{Start: &startTime, End: &now, Aggregate: metriccache.AggregationTypeAVG},
+				memoryCollectPolicy: "usageWithPageCache",
+			},
+			samples: samples{
+				CPUUsed: 2,
+				MemUsed: 10 * 1024 * 1024 * 1024,
+			},
+			want: v1.ResourceList{
+				v1.ResourceCPU:    *resource.NewMilliQuantity(2000, resource.DecimalSI),
+				v1.ResourceMemory: *resource.NewQuantity(10*1024*1024*1024, resource.BinarySI),
+			},
+			want1: now.Sub(startTime),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.args.memoryCollectPolicy == slov1alpha1.UsageWithHotPageCache {
+				system.SetIsStartColdMemory(true)
+			}
+			mockMetricCache := mockmetriccache.NewMockMetricCache(ctrl)
+			mockResultFactory := mockmetriccache.NewMockAggregateResultFactory(ctrl)
+			metriccache.DefaultAggregateResultFactory = mockResultFactory
+			mockQuerier := mockmetriccache.NewMockQuerier(ctrl)
+			mockMetricCache.EXPECT().Querier(gomock.Any(), gomock.Any()).Return(mockQuerier, nil).AnyTimes()
+
+			duration := tt.args.queryparam.End.Sub(*tt.args.queryparam.Start)
+			cpuQueryMeta, err := metriccache.NodeCPUUsageMetric.BuildQueryMeta(nil)
+			assert.NoError(t, err)
+			buildMockQueryResult(ctrl, mockQuerier, mockResultFactory, cpuQueryMeta, tt.samples.CPUUsed, duration)
+
+			memQueryMeta, err := metriccache.NodeMemoryUsageMetric.BuildQueryMeta(nil)
+			if tt.args.memoryCollectPolicy == slov1alpha1.UsageWithHotPageCache {
+				memQueryMeta, err = metriccache.NodeMemoryWithHotPageUsageMetric.BuildQueryMeta(nil)
+			} else if tt.args.memoryCollectPolicy == slov1alpha1.UsageWithPageCache {
+				memQueryMeta, err = metriccache.NodeMemoryUsageWithPageCacheMetric.BuildQueryMeta(nil)
+			}
+			assert.NoError(t, err)
+			buildMockQueryResult(ctrl, mockQuerier, mockResultFactory, memQueryMeta, tt.samples.MemUsed, duration)
+			r := &nodeMetricInformer{
+				metricCache: mockMetricCache,
+			}
+			r.getNodeMetricSpec().CollectPolicy.NodeMemoryCollectPolicy = &tt.args.memoryCollectPolicy
+			got, got1, err := r.collectNodeMetric(tt.args.queryparam)
+			assert.NoError(t, err)
+			assert.Equalf(t, tt.want, got, "collectNodeMetric(%v)", tt.args.queryparam)
+			assert.Equalf(t, tt.want1, got1, "collectNodeMetric(%v)", tt.args.queryparam)
+		})
+	}
+}
+
+func Test_nodeMetricInformer_collectPodMetric(t *testing.T) {
+	now := time.Now()
+	startTime := now.Add(-time.Second * 120)
+
+	type args struct {
+		queryparam          metriccache.QueryParam
+		memoryCollectPolicy slov1alpha1.NodeMemoryCollectPolicy
+		pod                 *statesinformer.PodMeta
+	}
+	type samples struct {
+		CPUUsed float64
+		MemUsed float64
+	}
+	tests := []struct {
+		name    string
+		args    args
+		samples samples
+		wantErr bool
+		want    *slov1alpha1.PodMetricInfo
+	}{
+		{
+			name: "report usageWithoutPageCache",
+			args: args{
+				queryparam:          metriccache.QueryParam{Start: &startTime, End: &now, Aggregate: metriccache.AggregationTypeAVG},
+				memoryCollectPolicy: slov1alpha1.UsageWithoutPageCache,
+				pod: &statesinformer.PodMeta{
+					Pod: &v1.Pod{
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "test-pod",
+							Namespace: "default",
+							UID:       "test-pod",
+							Labels: map[string]string{
+								apiext.LabelPodQoS: string(apiext.QoSLSR),
+							},
+						},
+						Spec: v1.PodSpec{
+							Priority: pointer.Int32(apiext.PriorityProdValueMax),
+						},
+					},
+				},
+			},
+			samples: samples{
+				CPUUsed: 2,
+				MemUsed: 10 * 1024 * 1024 * 1024,
+			},
+			want: &slov1alpha1.PodMetricInfo{
+				Name:      "test-pod",
+				Namespace: "default",
+				Priority:  apiext.PriorityProd,
+				QoS:       apiext.QoSLSR,
+				PodUsage: slov1alpha1.ResourceMap{
+					ResourceList: v1.ResourceList{
+						v1.ResourceCPU:    *resource.NewMilliQuantity(2000, resource.DecimalSI),
+						v1.ResourceMemory: *resource.NewQuantity(10*1024*1024*1024, resource.BinarySI),
+					},
+				},
+			},
+		},
+		{
+			name: "report usageWithHotPageCache",
+			args: args{
+				queryparam:          metriccache.QueryParam{Start: &startTime, End: &now, Aggregate: metriccache.AggregationTypeAVG},
+				memoryCollectPolicy: slov1alpha1.UsageWithHotPageCache,
+				pod: &statesinformer.PodMeta{
+					Pod: &v1.Pod{
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "test-pod",
+							Namespace: "default",
+							UID:       "test-pod",
+							Labels: map[string]string{
+								apiext.LabelPodQoS: string(apiext.QoSLS),
+							},
+						},
+						Spec: v1.PodSpec{
+							Priority: pointer.Int32(apiext.PriorityBatchValueMin),
+						},
+					},
+				},
+			},
+			samples: samples{
+				CPUUsed: 2,
+				MemUsed: 10 * 1024 * 1024 * 1024,
+			},
+			want: &slov1alpha1.PodMetricInfo{
+				Name:      "test-pod",
+				Namespace: "default",
+				Priority:  apiext.PriorityBatch,
+				QoS:       apiext.QoSLS,
+				PodUsage: slov1alpha1.ResourceMap{
+					ResourceList: v1.ResourceList{
+						v1.ResourceCPU:    *resource.NewMilliQuantity(2000, resource.DecimalSI),
+						v1.ResourceMemory: *resource.NewQuantity(10*1024*1024*1024, resource.BinarySI),
+					},
+				},
+			},
+		},
+		{
+			name: "report usageWithPageCache",
+			args: args{
+				queryparam:          metriccache.QueryParam{Start: &startTime, End: &now, Aggregate: metriccache.AggregationTypeAVG},
+				memoryCollectPolicy: slov1alpha1.UsageWithPageCache,
+				pod: &statesinformer.PodMeta{
+					Pod: &v1.Pod{
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "test-pod",
+							Namespace: "default",
+							UID:       "test-pod",
+						},
+					},
+				},
+			},
+			samples: samples{
+				CPUUsed: 2,
+				MemUsed: 10 * 1024 * 1024 * 1024,
+			},
+			want: &slov1alpha1.PodMetricInfo{
+				Name:      "test-pod",
+				Namespace: "default",
+				Priority:  apiext.PriorityBatch,
+				QoS:       apiext.QoSBE,
+				PodUsage: slov1alpha1.ResourceMap{
+					ResourceList: v1.ResourceList{
+						v1.ResourceCPU:    *resource.NewMilliQuantity(2000, resource.DecimalSI),
+						v1.ResourceMemory: *resource.NewQuantity(10*1024*1024*1024, resource.BinarySI),
+					},
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			if tt.args.memoryCollectPolicy == slov1alpha1.UsageWithHotPageCache {
+				system.SetIsStartColdMemory(true)
+			}
+			mockMetricCache := mockmetriccache.NewMockMetricCache(ctrl)
+			mockResultFactory := mockmetriccache.NewMockAggregateResultFactory(ctrl)
+			metriccache.DefaultAggregateResultFactory = mockResultFactory
+			mockQuerier := mockmetriccache.NewMockQuerier(ctrl)
+			mockMetricCache.EXPECT().Querier(gomock.Any(), gomock.Any()).Return(mockQuerier, nil).AnyTimes()
+
+			duration := tt.args.queryparam.End.Sub(*tt.args.queryparam.Start)
+			cpuQueryMeta, err := metriccache.PodCPUUsageMetric.BuildQueryMeta(metriccache.MetricPropertiesFunc.Pod(string(tt.args.pod.Pod.UID)))
+			assert.NoError(t, err)
+			buildMockQueryResult(ctrl, mockQuerier, mockResultFactory, cpuQueryMeta, tt.samples.CPUUsed, duration)
+
+			memQueryMeta, err := metriccache.PodMemUsageMetric.BuildQueryMeta(metriccache.MetricPropertiesFunc.Pod(string(tt.args.pod.Pod.UID)))
+			if tt.args.memoryCollectPolicy == slov1alpha1.UsageWithHotPageCache {
+				memQueryMeta, err = metriccache.PodMemoryWithHotPageUsageMetric.BuildQueryMeta(metriccache.MetricPropertiesFunc.Pod(string(tt.args.pod.Pod.UID)))
+			} else if tt.args.memoryCollectPolicy == slov1alpha1.UsageWithPageCache {
+				memQueryMeta, err = metriccache.PodMemoryUsageWithPageCacheMetric.BuildQueryMeta(metriccache.MetricPropertiesFunc.Pod(string(tt.args.pod.Pod.UID)))
+			}
+			assert.NoError(t, err)
+			buildMockQueryResult(ctrl, mockQuerier, mockResultFactory, memQueryMeta, tt.samples.MemUsed, duration)
+
+			r := &nodeMetricInformer{
+				metricCache: mockMetricCache,
+				nodeMetric: &slov1alpha1.NodeMetric{
+					Spec: slov1alpha1.NodeMetricSpec{
+						CollectPolicy: &slov1alpha1.NodeMetricCollectPolicy{
+							NodeMemoryCollectPolicy: &tt.args.memoryCollectPolicy,
+						},
+					},
+				},
+			}
+			got, err := r.collectPodMetric(tt.args.pod, tt.args.queryparam)
+			assert.Equal(t, tt.wantErr, err != nil, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func buildMockQueryResult(ctrl *gomock.Controller, querier *mockmetriccache.MockQuerier, factory *mockmetriccache.MockAggregateResultFactory,
+	queryMeta metriccache.MetricMeta, value float64, duration time.Duration) {
+	result := mockmetriccache.NewMockAggregateResult(ctrl)
+	result.EXPECT().Value(gomock.Any()).Return(value, nil).AnyTimes()
+	result.EXPECT().Count().Return(1).AnyTimes()
+	result.EXPECT().TimeRangeDuration().Return(duration).AnyTimes()
+	factory.EXPECT().New(queryMeta).Return(result).AnyTimes()
+	querier.EXPECT().Query(queryMeta, gomock.Any(), result).SetArg(2, *result).Return(nil).AnyTimes()
+}
+
+func Test_nodeMetricInformer_collectSystemAggregateMetric(t *testing.T) {
+	end := time.Now()
+	start := end.Add(-defaultAggregateDurationSeconds * time.Second)
+	type fields struct {
+		sysResultAVG slov1alpha1.ResourceMap
+		sysResultP50 slov1alpha1.ResourceMap
+		sysResultP90 slov1alpha1.ResourceMap
+		sysResultP95 slov1alpha1.ResourceMap
+		sysResultP99 slov1alpha1.ResourceMap
+	}
+	tests := []struct {
+		name   string
+		fields fields
+	}{
+		{
+			name: "merge system metric",
+			fields: fields{
+				sysResultAVG: slov1alpha1.ResourceMap{
+					ResourceList: v1.ResourceList{
+						v1.ResourceCPU:    *resource.NewMilliQuantity(1000, resource.DecimalSI),
+						v1.ResourceMemory: *resource.NewQuantity(1, resource.BinarySI),
+					},
+				},
+				sysResultP50: slov1alpha1.ResourceMap{
+					ResourceList: v1.ResourceList{
+						v1.ResourceCPU:    *resource.NewMilliQuantity(2000, resource.DecimalSI),
+						v1.ResourceMemory: *resource.NewQuantity(2, resource.BinarySI),
+					},
+				},
+				sysResultP90: slov1alpha1.ResourceMap{
+					ResourceList: v1.ResourceList{
+						v1.ResourceCPU:    *resource.NewMilliQuantity(3000, resource.DecimalSI),
+						v1.ResourceMemory: *resource.NewQuantity(3, resource.BinarySI),
+					},
+				},
+				sysResultP95: slov1alpha1.ResourceMap{
+					ResourceList: v1.ResourceList{
+						v1.ResourceCPU:    *resource.NewMilliQuantity(4000, resource.DecimalSI),
+						v1.ResourceMemory: *resource.NewQuantity(4, resource.BinarySI),
+					},
+				},
+				sysResultP99: slov1alpha1.ResourceMap{
+					ResourceList: v1.ResourceList{
+						v1.ResourceCPU:    *resource.NewMilliQuantity(5000, resource.DecimalSI),
+						v1.ResourceMemory: *resource.NewQuantity(5, resource.BinarySI),
+					},
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+			mockMetricCache := mockmetriccache.NewMockMetricCache(ctrl)
+			mockResultFactory := mockmetriccache.NewMockAggregateResultFactory(ctrl)
+			metriccache.DefaultAggregateResultFactory = mockResultFactory
+			mockQuerier := mockmetriccache.NewMockQuerier(ctrl)
+			mockMetricCache.EXPECT().Querier(gomock.Any(), gomock.Any()).Return(mockQuerier, nil).AnyTimes()
+			mockMetricCache.EXPECT().Get(gomock.Any()).Return(nil, false).AnyTimes()
+			result := mockmetriccache.NewMockAggregateResult(ctrl)
+			result.EXPECT().Value(metriccache.AggregationTypeAVG).Return(float64(1), nil).AnyTimes()
+			result.EXPECT().Value(metriccache.AggregationTypeP50).Return(float64(2), nil).AnyTimes()
+			result.EXPECT().Value(metriccache.AggregationTypeP90).Return(float64(3), nil).AnyTimes()
+			result.EXPECT().Value(metriccache.AggregationTypeP95).Return(float64(4), nil).AnyTimes()
+			result.EXPECT().Value(metriccache.AggregationTypeP99).Return(float64(5), nil).AnyTimes()
+			result.EXPECT().Count().Return(1).AnyTimes()
+			result.EXPECT().TimeRangeDuration().Return(end.Sub(start)).AnyTimes()
+			mockResultFactory.EXPECT().New(gomock.Any()).Return(result).AnyTimes()
+			mockQuerier.EXPECT().Query(gomock.Any(), gomock.Any(), gomock.Any()).SetArg(2, *result).Return(nil).AnyTimes()
+			r := &nodeMetricInformer{
+				metricCache: mockMetricCache,
+				nodeMetric: &slov1alpha1.NodeMetric{
+					Spec: slov1alpha1.NodeMetricSpec{
+						CollectPolicy: &slov1alpha1.NodeMetricCollectPolicy{
+							AggregateDurationSeconds: defaultNodeMetricSpec.CollectPolicy.AggregateDurationSeconds,
+							ReportIntervalSeconds:    defaultNodeMetricSpec.CollectPolicy.ReportIntervalSeconds,
+							NodeAggregatePolicy: &slov1alpha1.AggregatePolicy{
+								Durations: []metav1.Duration{
+									{Duration: 5 * time.Minute},
+								},
+							},
+						},
+					},
+				},
+			}
+			want := &slov1alpha1.NodeMetricInfo{
+				NodeUsage: tt.fields.sysResultAVG,
+				AggregatedNodeUsages: []slov1alpha1.AggregatedUsage{
+					{
+						Usage: map[apiext.AggregationType]slov1alpha1.ResourceMap{
+							apiext.P50: tt.fields.sysResultP50,
+							apiext.P90: tt.fields.sysResultP90,
+							apiext.P95: tt.fields.sysResultP95,
+							apiext.P99: tt.fields.sysResultP99,
+						},
+						Duration: metav1.Duration{
+							Duration: end.Sub(start),
+						},
+					},
+				},
+			}
+			got := r.collectSystemAggregateMetric(end, r.nodeMetric.Spec.CollectPolicy.NodeAggregatePolicy)
+			assert.Equal(t, want.AggregatedNodeUsages, got)
+		})
+	}
+}
+
+func Test_nodeMetricInformer_collectSystemMetric(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	now := time.Now()
+	startTime := now.Add(-time.Second * 120)
+
+	type args struct {
 		queryparam metriccache.QueryParam
 	}
 	type samples struct {
@@ -837,30 +1289,183 @@ func Test_nodeMetricInformer_collectNodeMetric(t *testing.T) {
 			mockMetricCache.EXPECT().Querier(gomock.Any(), gomock.Any()).Return(mockQuerier, nil).AnyTimes()
 
 			duration := tt.args.queryparam.End.Sub(*tt.args.queryparam.Start)
-			cpuQueryMeta, err := metriccache.NodeCPUUsageMetric.BuildQueryMeta(nil)
+			cpuQueryMeta, err := metriccache.SystemCPUUsageMetric.BuildQueryMeta(nil)
 			assert.NoError(t, err)
 			buildMockQueryResult(ctrl, mockQuerier, mockResultFactory, cpuQueryMeta, tt.samples.CPUUsed, duration)
 
-			memQueryMeta, err := metriccache.NodeMemoryUsageMetric.BuildQueryMeta(nil)
+			memQueryMeta, err := metriccache.SystemMemoryUsageMetric.BuildQueryMeta(nil)
 			assert.NoError(t, err)
 			buildMockQueryResult(ctrl, mockQuerier, mockResultFactory, memQueryMeta, tt.samples.MemUsed, duration)
 			r := &nodeMetricInformer{
 				metricCache: mockMetricCache,
 			}
-			got, got1, err := r.collectNodeMetric(tt.args.queryparam)
+			got, got1, err := r.collectSystemMetric(tt.args.queryparam)
 			assert.NoError(t, err)
-			assert.Equalf(t, tt.want, got, "collectNodeMetric(%v)", tt.args.queryparam)
-			assert.Equalf(t, tt.want1, got1, "collectNodeMetric(%v)", tt.args.queryparam)
+			assert.Equalf(t, tt.want, got, "collectSystemMetric(%v)", tt.args.queryparam)
+			assert.Equalf(t, tt.want1, got1, "collectSystemMetric(%v)", tt.args.queryparam)
 		})
 	}
 }
 
-func buildMockQueryResult(ctrl *gomock.Controller, querier *mockmetriccache.MockQuerier, factory *mockmetriccache.MockAggregateResultFactory,
-	queryMeta metriccache.MetricMeta, value float64, duration time.Duration) {
-	result := mockmetriccache.NewMockAggregateResult(ctrl)
-	result.EXPECT().Value(gomock.Any()).Return(value, nil).AnyTimes()
-	result.EXPECT().Count().Return(1).AnyTimes()
-	result.EXPECT().TimeRangeDuration().Return(duration).AnyTimes()
-	factory.EXPECT().New(queryMeta).Return(result).AnyTimes()
-	querier.EXPECT().Query(queryMeta, gomock.Any(), result).SetArg(2, *result).Return(nil).AnyTimes()
+func Test_nodeMetricInformer_collectHostAppMetric(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	now := time.Now()
+	startTime := now.Add(-time.Second * 120)
+
+	type fields struct {
+		memoryCollectPolicy slov1alpha1.NodeMemoryCollectPolicy
+		hostAppCPU          float64
+		hostAppMemory       float64
+	}
+	type args struct {
+		hostApp    *slov1alpha1.HostApplicationSpec
+		queryParam metriccache.QueryParam
+	}
+	tests := []struct {
+		name    string
+		fields  fields
+		args    args
+		want    *slov1alpha1.HostApplicationMetricInfo
+		wantErr bool
+	}{
+		{
+			name:   "return error for nil host app",
+			fields: fields{},
+			args: args{
+				queryParam: metriccache.QueryParam{Start: &startTime, End: &now, Aggregate: metriccache.AggregationTypeAVG},
+			},
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name: "get host app metric with memory without page cache",
+			fields: fields{
+				memoryCollectPolicy: slov1alpha1.UsageWithoutPageCache,
+				hostAppCPU:          1,
+				hostAppMemory:       1024,
+			},
+			args: args{
+				hostApp: &slov1alpha1.HostApplicationSpec{
+					Name:     "test-host-app",
+					Priority: apiext.PriorityBatch,
+					QoS:      apiext.QoSBE,
+				},
+				queryParam: metriccache.QueryParam{Start: &startTime, End: &now, Aggregate: metriccache.AggregationTypeAVG},
+			},
+			want: &slov1alpha1.HostApplicationMetricInfo{
+				Name: "test-host-app",
+				Usage: slov1alpha1.ResourceMap{
+					ResourceList: v1.ResourceList{
+						v1.ResourceCPU:    *resource.NewMilliQuantity(int64(1000), resource.DecimalSI),
+						v1.ResourceMemory: *resource.NewQuantity(int64(1024), resource.BinarySI),
+					},
+				},
+				Priority: apiext.PriorityBatch,
+				QoS:      apiext.QoSBE,
+			},
+			wantErr: false,
+		},
+		{
+			name: "get host app metric with memory with page cache",
+			fields: fields{
+				memoryCollectPolicy: slov1alpha1.UsageWithPageCache,
+				hostAppCPU:          1,
+				hostAppMemory:       1024,
+			},
+			args: args{
+				hostApp: &slov1alpha1.HostApplicationSpec{
+					Name:     "test-host-app",
+					Priority: apiext.PriorityBatch,
+					QoS:      apiext.QoSBE,
+				},
+				queryParam: metriccache.QueryParam{Start: &startTime, End: &now, Aggregate: metriccache.AggregationTypeAVG},
+			},
+			want: &slov1alpha1.HostApplicationMetricInfo{
+				Name: "test-host-app",
+				Usage: slov1alpha1.ResourceMap{
+					ResourceList: v1.ResourceList{
+						v1.ResourceCPU:    *resource.NewMilliQuantity(int64(1000), resource.DecimalSI),
+						v1.ResourceMemory: *resource.NewQuantity(int64(1024), resource.BinarySI),
+					},
+				},
+				Priority: apiext.PriorityBatch,
+				QoS:      apiext.QoSBE,
+			},
+			wantErr: false,
+		},
+		{
+			name: "get host app metric with memory with hot page cache",
+			fields: fields{
+				memoryCollectPolicy: slov1alpha1.UsageWithHotPageCache,
+				hostAppCPU:          1,
+				hostAppMemory:       1024,
+			},
+			args: args{
+				hostApp: &slov1alpha1.HostApplicationSpec{
+					Name:     "test-host-app",
+					Priority: apiext.PriorityBatch,
+					QoS:      apiext.QoSBE,
+				},
+				queryParam: metriccache.QueryParam{Start: &startTime, End: &now, Aggregate: metriccache.AggregationTypeAVG},
+			},
+			want: &slov1alpha1.HostApplicationMetricInfo{
+				Name: "test-host-app",
+				Usage: slov1alpha1.ResourceMap{
+					ResourceList: v1.ResourceList{
+						v1.ResourceCPU:    *resource.NewMilliQuantity(int64(1000), resource.DecimalSI),
+						v1.ResourceMemory: *resource.NewQuantity(int64(1024), resource.BinarySI),
+					},
+				},
+				Priority: apiext.PriorityBatch,
+				QoS:      apiext.QoSBE,
+			},
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.fields.memoryCollectPolicy == slov1alpha1.UsageWithHotPageCache {
+				system.SetIsStartColdMemory(true)
+			}
+			mockMetricCache := mockmetriccache.NewMockMetricCache(ctrl)
+			mockResultFactory := mockmetriccache.NewMockAggregateResultFactory(ctrl)
+			metriccache.DefaultAggregateResultFactory = mockResultFactory
+			mockQuerier := mockmetriccache.NewMockQuerier(ctrl)
+			mockMetricCache.EXPECT().Querier(gomock.Any(), gomock.Any()).Return(mockQuerier, nil).AnyTimes()
+
+			if tt.args.hostApp != nil {
+
+				duration := tt.args.queryParam.End.Sub(*tt.args.queryParam.Start)
+				cpuQueryMeta, err := metriccache.HostAppCPUUsageMetric.BuildQueryMeta(
+					metriccache.MetricPropertiesFunc.HostApplication(tt.args.hostApp.Name))
+				assert.NoError(t, err)
+				buildMockQueryResult(ctrl, mockQuerier, mockResultFactory, cpuQueryMeta, tt.fields.hostAppCPU, duration)
+
+				memQueryMeta, err := metriccache.HostAppMemoryUsageMetric.BuildQueryMeta(metriccache.MetricPropertiesFunc.HostApplication(tt.args.hostApp.Name))
+				if tt.fields.memoryCollectPolicy == slov1alpha1.UsageWithHotPageCache {
+					memQueryMeta, err = metriccache.HostAppMemoryWithHotPageUsageMetric.BuildQueryMeta(metriccache.MetricPropertiesFunc.HostApplication(tt.args.hostApp.Name))
+				} else if tt.fields.memoryCollectPolicy == slov1alpha1.UsageWithPageCache {
+					memQueryMeta, err = metriccache.HostAppMemoryUsageWithPageCacheMetric.BuildQueryMeta(metriccache.MetricPropertiesFunc.HostApplication(tt.args.hostApp.Name))
+				}
+				assert.NoError(t, err)
+				buildMockQueryResult(ctrl, mockQuerier, mockResultFactory, memQueryMeta, tt.fields.hostAppMemory, duration)
+			}
+
+			r := &nodeMetricInformer{
+				metricCache: mockMetricCache,
+			}
+
+			r.getNodeMetricSpec().CollectPolicy.NodeMemoryCollectPolicy = &tt.fields.memoryCollectPolicy
+
+			got, err := r.collectHostAppMetric(tt.args.hostApp, tt.args.queryParam)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("collectHostAppMetric() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("collectHostAppMetric() got = %v, want %v", got, tt.want)
+			}
+		})
+	}
 }

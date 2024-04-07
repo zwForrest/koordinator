@@ -18,10 +18,7 @@ package elasticquota
 
 import (
 	corev1 "k8s.io/api/core/v1"
-	quotav1 "k8s.io/apiserver/pkg/quota/v1"
 	"k8s.io/klog/v2"
-
-	"github.com/koordinator-sh/koordinator/pkg/scheduler/plugins/elasticquota/core"
 )
 
 func (g *Plugin) OnNodeAdd(obj interface{}) {
@@ -29,57 +26,28 @@ func (g *Plugin) OnNodeAdd(obj interface{}) {
 	if !ok {
 		return
 	}
-
 	if node.DeletionTimestamp != nil {
-		klog.Errorf("node is deleting:%v", node.Name)
+		klog.V(5).Infof("OnNodeAddFunc add:%v delete:%v", node.Name, node.DeletionTimestamp)
 		return
 	}
 
-	node = core.RunDecorateNode(node)
-
-	g.nodeResourceMapLock.Lock()
-	defer g.nodeResourceMapLock.Unlock()
-
-	if _, ok := g.nodeResourceMap[node.Name]; ok {
-		return
-	}
-	g.nodeResourceMap[node.Name] = struct{}{}
-	g.groupQuotaManager.UpdateClusterTotalResource(node.Status.Allocatable)
-	klog.V(5).Infof("OnNodeAddFunc success %v", node.Name)
+	g.groupQuotaManager.OnNodeAdd(node)
 }
 
 func (g *Plugin) OnNodeUpdate(oldObj, newObj interface{}) {
 	newNode := newObj.(*corev1.Node)
 	oldNode := oldObj.(*corev1.Node)
 
-	g.nodeResourceMapLock.Lock()
-	defer g.nodeResourceMapLock.Unlock()
-
-	if _, exist := g.nodeResourceMap[newNode.Name]; !exist {
-		return
-	}
-
 	if newNode.ResourceVersion == oldNode.ResourceVersion {
 		klog.Warningf("update node warning, update version for the same, nodeName:%v", newNode.Name)
 		return
 	}
-
 	if newNode.DeletionTimestamp != nil {
 		klog.V(5).Infof("OnNodeUpdateFunc update:%v delete:%v", newNode.Name, newNode.DeletionTimestamp)
 		return
 	}
 
-	oldNode = core.RunDecorateNode(oldNode)
-	oldNodeAllocatable := oldNode.Status.Allocatable
-	newNode = core.RunDecorateNode(newNode)
-	newNodeAllocatable := newNode.Status.Allocatable
-	if quotav1.Equals(oldNodeAllocatable, newNodeAllocatable) {
-		return
-	}
-
-	deltaNodeAllocatable := quotav1.Subtract(newNodeAllocatable, oldNodeAllocatable)
-	g.groupQuotaManager.UpdateClusterTotalResource(deltaNodeAllocatable)
-	klog.V(5).Infof("OnNodeUpdateFunc success:%v [%v]", newNode.Name, newNodeAllocatable)
+	g.groupQuotaManager.OnNodeUpdate(oldNode, newNode)
 }
 
 func (g *Plugin) OnNodeDelete(obj interface{}) {
@@ -89,16 +57,5 @@ func (g *Plugin) OnNodeDelete(obj interface{}) {
 		return
 	}
 
-	g.nodeResourceMapLock.Lock()
-	defer g.nodeResourceMapLock.Unlock()
-
-	if _, exist := g.nodeResourceMap[node.Name]; !exist {
-		return
-	}
-
-	node = core.RunDecorateNode(node)
-	delta := quotav1.Subtract(corev1.ResourceList{}, node.Status.Allocatable)
-	g.groupQuotaManager.UpdateClusterTotalResource(delta)
-	delete(g.nodeResourceMap, node.Name)
-	klog.V(5).Infof("OnNodeDeleteFunc success:%v [%v]", node.Name, delta)
+	g.groupQuotaManager.OnNodeDelete(node)
 }

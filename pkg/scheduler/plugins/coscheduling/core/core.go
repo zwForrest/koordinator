@@ -72,6 +72,8 @@ type Manager interface {
 	GetGangSummary(gangId string) (*GangSummary, bool)
 	GetGangSummaries() map[string]*GangSummary
 	IsGangMinSatisfied(*corev1.Pod) bool
+	GetChildScheduleCycle(*corev1.Pod) int
+	GetGangGroupWaitingBoundPodNum(pod *corev1.Pod) int
 }
 
 // PodGroupManager defines the scheduling operation called
@@ -253,6 +255,9 @@ func (pgMgr *PodGroupManager) PreFilter(ctx context.Context, pod *corev1.Pod) er
 
 	gangMode := gang.getGangMode()
 	if gangMode == extension.GangModeStrict {
+		if pod.Status.NominatedNodeName != "" {
+			return nil
+		}
 		podScheduleCycle := gang.getChildScheduleCycle(pod)
 		if !gang.isScheduleCycleValid() {
 			return fmt.Errorf("gang scheduleCycle not valid, gangName: %v, podName: %v",
@@ -271,7 +276,7 @@ func (pgMgr *PodGroupManager) PreFilter(ctx context.Context, pod *corev1.Pod) er
 // ii. If non-strict mode, we will do nothing.
 func (pgMgr *PodGroupManager) PostFilter(ctx context.Context, pod *corev1.Pod, handle framework.Handle, pluginName string, filteredNodeStatusMap framework.NodeToStatusMap) (*framework.PostFilterResult, *framework.Status) {
 	if !util.IsPodNeedGang(pod) {
-		return &framework.PostFilterResult{}, framework.NewStatus(framework.Unschedulable, "")
+		return &framework.PostFilterResult{}, framework.NewStatus(framework.Unschedulable)
 	}
 	gang := pgMgr.GetGangByPod(pod)
 	if gang == nil {
@@ -365,6 +370,7 @@ func (pgMgr *PodGroupManager) rejectGangGroupById(handle framework.Handle, plugi
 	gangGroup := gang.getGangGroup()
 	gangSet := sets.NewString(gangGroup...)
 
+	rejectedPodCount := 0
 	if handle != nil {
 		handle.IterateOverWaitingPods(func(waitingPod framework.WaitingPod) {
 			waitingGangId := util.GetId(waitingPod.GetPod().Namespace, util.GetGangNameByPod(waitingPod.GetPod()))
@@ -372,8 +378,12 @@ func (pgMgr *PodGroupManager) rejectGangGroupById(handle framework.Handle, plugi
 				klog.V(1).InfoS("GangGroup gets rejected due to member Gang is unschedulable",
 					"gang", gangId, "waitingGang", waitingGangId, "waitingPod", klog.KObj(waitingPod.GetPod()))
 				waitingPod.Reject(pluginName, message)
+				rejectedPodCount++
 			}
 		})
+	}
+	if rejectedPodCount == 0 {
+		return
 	}
 	for gang := range gangSet {
 		gangIns := pgMgr.cache.getGangFromCacheByGangId(gang, false)
@@ -533,4 +543,29 @@ func (pgMgr *PodGroupManager) GetGangSummaries() map[string]*GangSummary {
 	}
 
 	return result
+}
+
+func (pgMgr *PodGroupManager) GetChildScheduleCycle(pod *corev1.Pod) int {
+	gang := pgMgr.GetGangByPod(pod)
+	if gang == nil {
+		return 0
+	}
+
+	return gang.getChildScheduleCycle(pod)
+}
+
+func (pgMgr *PodGroupManager) GetGangGroupWaitingBoundPodNum(pod *corev1.Pod) int {
+	gang := pgMgr.GetGangByPod(pod)
+	if gang == nil {
+		return 0
+	}
+	gangGroup := gang.GangGroup
+	waitingPodNum := 0
+	for _, memberGangID := range gangGroup {
+		memberGang := pgMgr.cache.getGangFromCacheByGangId(memberGangID, false)
+		if memberGang != nil {
+			waitingPodNum += memberGang.getGangWaitingPods()
+		}
+	}
+	return waitingPodNum
 }

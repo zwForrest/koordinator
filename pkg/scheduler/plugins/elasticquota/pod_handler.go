@@ -18,9 +18,8 @@ package elasticquota
 
 import (
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog/v2"
-
-	"github.com/koordinator-sh/koordinator/pkg/scheduler/plugins/elasticquota/core"
 )
 
 // todo the eventHandler's operation should be a complete transaction in the future work.
@@ -31,10 +30,18 @@ func (g *Plugin) OnPodAdd(obj interface{}) {
 		return
 	}
 
-	pod = core.RunDecoratePod(pod)
-	quotaName := g.getPodAssociateQuotaName(pod)
-	g.groupQuotaManager.OnPodAdd(quotaName, pod)
-	klog.V(5).Infof("OnPodAddFunc %v.%v add success, quotaName:%v", pod.Namespace, pod.Name, quotaName)
+	quotaName, treeID := g.getPodAssociateQuotaNameAndTreeID(pod)
+	if quotaName == "" {
+		return
+	}
+
+	mgr := g.GetGroupQuotaManagerForTree(treeID)
+	if mgr != nil {
+		mgr.OnPodAdd(quotaName, pod)
+		klog.V(5).Infof("OnPodAddFunc %v add success, quota: %v, tree: [%v]", klog.KObj(pod), quotaName, treeID)
+	} else {
+		klog.Warningf("OnPodAddFunc %v add failed, quota: %v, quota manager not found: %v", klog.KObj(pod), quotaName, treeID)
+	}
 }
 
 func (g *Plugin) OnPodUpdate(oldObj, newObj interface{}) {
@@ -42,26 +49,78 @@ func (g *Plugin) OnPodUpdate(oldObj, newObj interface{}) {
 	newPod := newObj.(*corev1.Pod)
 
 	if oldPod.ResourceVersion == newPod.ResourceVersion {
-		klog.Warningf("update pod warning, update version for the same:%v", newPod.Name)
 		return
 	}
 
-	oldPod = core.RunDecoratePod(oldPod)
-	newPod = core.RunDecoratePod(newPod)
-	oldQuotaName := g.getPodAssociateQuotaName(oldPod)
-	newQuotaName := g.getPodAssociateQuotaName(newPod)
-	g.groupQuotaManager.OnPodUpdate(newQuotaName, oldQuotaName, newPod, oldPod)
-	klog.V(5).Infof("OnPodUpdateFunc %v.%v update success, quotaName:%v", newPod.Namespace, newPod.Name, newQuotaName)
+	oldQuotaName, oldTree := g.getPodAssociateQuotaNameAndTreeID(oldPod)
+	newQuotaName, newTree := g.getPodAssociateQuotaNameAndTreeID(newPod)
+
+	if oldTree == newTree {
+		mgr := g.GetGroupQuotaManagerForTree(newTree)
+		if mgr != nil {
+			if oldQuotaName == "" {
+				if newQuotaName != "" {
+					mgr.OnPodAdd(newQuotaName, newPod)
+					klog.V(5).Infof("OnPodUpdateFunc %v add success, quota: %v, tree: [%v]", klog.KObj(newPod), newQuotaName, newTree)
+				}
+			} else {
+				if newQuotaName != "" {
+					mgr.OnPodUpdate(newQuotaName, oldQuotaName, newPod, oldPod)
+					klog.V(5).Infof("OnPodUpdateFunc %v update success, quota:%v, tree: [%v]", klog.KObj(newPod), newQuotaName, newTree)
+				} else {
+					mgr.OnPodDelete(oldQuotaName, oldPod)
+					klog.V(5).Infof("OnPodUpdateFunc %v delete success, quota:%v, tree: [%v]", klog.KObj(oldPod), oldQuotaName, oldTree)
+				}
+			}
+		} else {
+			klog.Errorf("OnPodUpdateFunc %v update failed, quota: %v, quota manager not found: %v", klog.KObj(newPod), newQuotaName, newTree)
+		}
+		return
+	}
+
+	oldMgr := g.GetGroupQuotaManagerForTree(oldTree)
+	newMgr := g.GetGroupQuotaManagerForTree(newTree)
+	if oldMgr != nil {
+		if oldQuotaName != "" {
+			oldMgr.OnPodDelete(oldQuotaName, oldPod)
+			klog.V(5).Infof("OnPodUpdateFunc %v, delete success, quota: %v, tree: %v", klog.KObj(oldPod), oldQuotaName, oldTree)
+		}
+	} else {
+		klog.Errorf("OnPodUpdateFunc %v delete failed, quota: %v, quota manager not found: %v", klog.KObj(oldPod), oldQuotaName, oldTree)
+	}
+	if newMgr != nil {
+		if newQuotaName != "" {
+			newMgr.OnPodAdd(newQuotaName, newPod)
+			klog.V(5).Infof("OnPodUpdateFunc %v add success, quota: %v, tree: %v ", klog.KObj(newPod), newQuotaName, newTree)
+		}
+	} else {
+		klog.Errorf("OnPodUpdateFunc %v add failed, quota: %v, quota manager not found: %v", klog.KObj(newPod), newQuotaName, newTree)
+	}
 }
 
 func (g *Plugin) OnPodDelete(obj interface{}) {
-	pod, ok := obj.(*corev1.Pod)
-	if !ok {
+	var pod *corev1.Pod
+	switch t := obj.(type) {
+	case *corev1.Pod:
+		pod = t
+	case cache.DeletedFinalStateUnknown:
+		pod, _ = t.Obj.(*corev1.Pod)
+	}
+	if pod == nil {
+		klog.V(4).InfoS("OnPodDeleteFunc, failed to parse object, obj: %T", obj)
 		return
 	}
 
-	pod = core.RunDecoratePod(pod)
-	quotaName := g.getPodAssociateQuotaName(pod)
-	g.groupQuotaManager.OnPodDelete(quotaName, pod)
-	klog.V(5).Infof("OnPodDeleteFunc %v.%v delete success", pod.Namespace, pod.Name)
+	quotaName, treeID := g.getPodAssociateQuotaNameAndTreeID(pod)
+	if quotaName == "" {
+		return
+	}
+
+	mgr := g.GetGroupQuotaManagerForTree(treeID)
+	if mgr != nil {
+		mgr.OnPodDelete(quotaName, pod)
+		klog.V(5).Infof("OnPodDeleteFunc %v delete success, quota: %v, tree: %v", klog.KObj(pod), quotaName, treeID)
+	} else {
+		klog.Errorf("OnPodDeleteFunc %v delete failed, quota: %v, tree: %v", klog.KObj(pod), quotaName, treeID)
+	}
 }

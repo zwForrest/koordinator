@@ -25,20 +25,24 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/pointer"
 
+	"github.com/koordinator-sh/koordinator/apis/configuration"
 	"github.com/koordinator-sh/koordinator/apis/extension"
+	slov1alpha1 "github.com/koordinator-sh/koordinator/apis/slo/v1alpha1"
 )
 
 func Test_GetNodeColocationStrategy(t *testing.T) {
-	memoryCalcPolicyByUsage := extension.CalculateByPodUsage
+	memoryCalcPolicyByUsage := configuration.CalculateByPodUsage
+	cpuCalcPolicyByUsage := configuration.CalculateByPodUsage
+	var defaultMemoryCollectPolicy = slov1alpha1.UsageWithoutPageCache
 	defaultCfg := NewDefaultColocationCfg()
 	type args struct {
-		cfg  *extension.ColocationCfg
+		cfg  *configuration.ColocationCfg
 		node *corev1.Node
 	}
 	tests := []struct {
 		name string
 		args args
-		want *extension.ColocationStrategy
+		want *configuration.ColocationStrategy
 	}{
 		{
 			name: "does not panic but return nil for empty input",
@@ -47,8 +51,8 @@ func Test_GetNodeColocationStrategy(t *testing.T) {
 		{
 			name: "does not panic but return nil for empty node",
 			args: args{
-				cfg: &extension.ColocationCfg{
-					ColocationStrategy: extension.ColocationStrategy{
+				cfg: &configuration.ColocationCfg{
+					ColocationStrategy: configuration.ColocationStrategy{
 						Enable: pointer.Bool(false),
 					},
 				},
@@ -58,22 +62,22 @@ func Test_GetNodeColocationStrategy(t *testing.T) {
 		{
 			name: "return partial cluster strategy",
 			args: args{
-				cfg: &extension.ColocationCfg{
-					ColocationStrategy: extension.ColocationStrategy{
+				cfg: &configuration.ColocationCfg{
+					ColocationStrategy: configuration.ColocationStrategy{
 						Enable: pointer.Bool(false),
 					},
 				},
 				node: &corev1.Node{},
 			},
-			want: &extension.ColocationStrategy{
+			want: &configuration.ColocationStrategy{
 				Enable: pointer.Bool(false),
 			},
 		},
 		{
 			name: "get cluster strategy for empty node configs",
 			args: args{
-				cfg: &extension.ColocationCfg{
-					ColocationStrategy: extension.ColocationStrategy{
+				cfg: &configuration.ColocationCfg{
+					ColocationStrategy: configuration.ColocationStrategy{
 						Enable:                        pointer.Bool(false),
 						CPUReclaimThresholdPercent:    pointer.Int64(65),
 						MemoryReclaimThresholdPercent: pointer.Int64(65),
@@ -84,7 +88,7 @@ func Test_GetNodeColocationStrategy(t *testing.T) {
 				},
 				node: &corev1.Node{},
 			},
-			want: &extension.ColocationStrategy{
+			want: &configuration.ColocationStrategy{
 				Enable:                        pointer.Bool(false),
 				CPUReclaimThresholdPercent:    pointer.Int64(65),
 				MemoryReclaimThresholdPercent: pointer.Int64(65),
@@ -96,8 +100,8 @@ func Test_GetNodeColocationStrategy(t *testing.T) {
 		{
 			name: "get merged node strategy 1",
 			args: args{
-				cfg: &extension.ColocationCfg{
-					ColocationStrategy: extension.ColocationStrategy{
+				cfg: &configuration.ColocationCfg{
+					ColocationStrategy: configuration.ColocationStrategy{
 						Enable:                        pointer.Bool(false),
 						CPUReclaimThresholdPercent:    pointer.Int64(65),
 						MemoryReclaimThresholdPercent: pointer.Int64(65),
@@ -106,16 +110,16 @@ func Test_GetNodeColocationStrategy(t *testing.T) {
 						UpdateTimeThresholdSeconds:    pointer.Int64(300),
 						ResourceDiffThreshold:         pointer.Float64(0.1),
 					},
-					NodeConfigs: []extension.NodeColocationCfg{
+					NodeConfigs: []configuration.NodeColocationCfg{
 						{
-							NodeCfgProfile: extension.NodeCfgProfile{
+							NodeCfgProfile: configuration.NodeCfgProfile{
 								NodeSelector: &metav1.LabelSelector{
 									MatchLabels: map[string]string{
 										"xxx": "yyy",
 									},
 								},
 							},
-							ColocationStrategy: extension.ColocationStrategy{
+							ColocationStrategy: configuration.ColocationStrategy{
 								Enable: pointer.Bool(true),
 							},
 						},
@@ -130,7 +134,7 @@ func Test_GetNodeColocationStrategy(t *testing.T) {
 					},
 				},
 			},
-			want: &extension.ColocationStrategy{
+			want: &configuration.ColocationStrategy{
 				Enable:                        pointer.Bool(true),
 				CPUReclaimThresholdPercent:    pointer.Int64(65),
 				MemoryReclaimThresholdPercent: pointer.Int64(65),
@@ -143,30 +147,30 @@ func Test_GetNodeColocationStrategy(t *testing.T) {
 		{
 			name: "get merged node strategy 2",
 			args: args{
-				cfg: &extension.ColocationCfg{
+				cfg: &configuration.ColocationCfg{
 					ColocationStrategy: defaultCfg.ColocationStrategy,
-					NodeConfigs: []extension.NodeColocationCfg{
+					NodeConfigs: []configuration.NodeColocationCfg{
 						{
-							NodeCfgProfile: extension.NodeCfgProfile{
+							NodeCfgProfile: configuration.NodeCfgProfile{
 								NodeSelector: &metav1.LabelSelector{
 									MatchLabels: map[string]string{
 										"xxx": "yyy",
 									},
 								},
 							},
-							ColocationStrategy: extension.ColocationStrategy{
+							ColocationStrategy: configuration.ColocationStrategy{
 								Enable: pointer.Bool(false),
 							},
 						},
 						{
-							NodeCfgProfile: extension.NodeCfgProfile{
+							NodeCfgProfile: configuration.NodeCfgProfile{
 								NodeSelector: &metav1.LabelSelector{
 									MatchLabels: map[string]string{
 										"xxx": "zzz",
 									},
 								},
 							},
-							ColocationStrategy: extension.ColocationStrategy{
+							ColocationStrategy: configuration.ColocationStrategy{
 								Enable: pointer.Bool(true),
 							},
 						},
@@ -181,24 +185,26 @@ func Test_GetNodeColocationStrategy(t *testing.T) {
 					},
 				},
 			},
-			want: &extension.ColocationStrategy{
+			want: &configuration.ColocationStrategy{
 				Enable:                         pointer.Bool(true),
 				MetricAggregateDurationSeconds: pointer.Int64(300),
 				MetricReportIntervalSeconds:    pointer.Int64(60),
 				MetricAggregatePolicy:          DefaultColocationStrategy().MetricAggregatePolicy,
 				CPUReclaimThresholdPercent:     pointer.Int64(60),
+				CPUCalculatePolicy:             &cpuCalcPolicyByUsage,
 				MemoryReclaimThresholdPercent:  pointer.Int64(65),
 				MemoryCalculatePolicy:          &memoryCalcPolicyByUsage,
 				DegradeTimeMinutes:             pointer.Int64(15),
 				UpdateTimeThresholdSeconds:     pointer.Int64(300),
 				ResourceDiffThreshold:          pointer.Float64(0.1),
+				MetricMemoryCollectPolicy:      &defaultMemoryCollectPolicy,
 			},
 		},
 		{
 			name: "get merged node strategy and ignore invalid selector",
 			args: args{
-				cfg: &extension.ColocationCfg{
-					ColocationStrategy: extension.ColocationStrategy{
+				cfg: &configuration.ColocationCfg{
+					ColocationStrategy: configuration.ColocationStrategy{
 						Enable:                        pointer.Bool(false),
 						CPUReclaimThresholdPercent:    pointer.Int64(65),
 						MemoryReclaimThresholdPercent: pointer.Int64(65),
@@ -206,9 +212,9 @@ func Test_GetNodeColocationStrategy(t *testing.T) {
 						UpdateTimeThresholdSeconds:    pointer.Int64(300),
 						ResourceDiffThreshold:         pointer.Float64(0.1),
 					},
-					NodeConfigs: []extension.NodeColocationCfg{
+					NodeConfigs: []configuration.NodeColocationCfg{
 						{
-							NodeCfgProfile: extension.NodeCfgProfile{
+							NodeCfgProfile: configuration.NodeCfgProfile{
 								NodeSelector: &metav1.LabelSelector{
 									MatchExpressions: []metav1.LabelSelectorRequirement{
 										{
@@ -220,12 +226,12 @@ func Test_GetNodeColocationStrategy(t *testing.T) {
 								},
 								Name: "xxx-out-yyy",
 							},
-							ColocationStrategy: extension.ColocationStrategy{
+							ColocationStrategy: configuration.ColocationStrategy{
 								Enable: pointer.Bool(false),
 							},
 						},
 						{
-							NodeCfgProfile: extension.NodeCfgProfile{
+							NodeCfgProfile: configuration.NodeCfgProfile{
 								NodeSelector: &metav1.LabelSelector{
 									MatchLabels: map[string]string{
 										"xxx": "yyy",
@@ -233,7 +239,7 @@ func Test_GetNodeColocationStrategy(t *testing.T) {
 								},
 								Name: "xxx-yyy",
 							},
-							ColocationStrategy: extension.ColocationStrategy{
+							ColocationStrategy: configuration.ColocationStrategy{
 								Enable: pointer.Bool(true),
 							},
 						},
@@ -248,8 +254,140 @@ func Test_GetNodeColocationStrategy(t *testing.T) {
 					},
 				},
 			},
-			want: &extension.ColocationStrategy{
+			want: &configuration.ColocationStrategy{
 				Enable:                        pointer.Bool(true),
+				CPUReclaimThresholdPercent:    pointer.Int64(65),
+				MemoryReclaimThresholdPercent: pointer.Int64(65),
+				DegradeTimeMinutes:            pointer.Int64(15),
+				UpdateTimeThresholdSeconds:    pointer.Int64(300),
+				ResourceDiffThreshold:         pointer.Float64(0.1),
+			},
+		},
+		{
+			name: "get strategy merged with node reclaim ratios",
+			args: args{
+				cfg: &configuration.ColocationCfg{
+					ColocationStrategy: configuration.ColocationStrategy{
+						Enable:                        pointer.Bool(false),
+						CPUReclaimThresholdPercent:    pointer.Int64(65),
+						MemoryReclaimThresholdPercent: pointer.Int64(65),
+						DegradeTimeMinutes:            pointer.Int64(15),
+						UpdateTimeThresholdSeconds:    pointer.Int64(300),
+						ResourceDiffThreshold:         pointer.Float64(0.1),
+					},
+				},
+				node: &corev1.Node{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "test-node",
+						Labels: map[string]string{
+							extension.LabelCPUReclaimRatio:    "0.7",
+							extension.LabelMemoryReclaimRatio: "0.75",
+						},
+					},
+				},
+			},
+			want: &configuration.ColocationStrategy{
+				Enable:                        pointer.Bool(false),
+				CPUReclaimThresholdPercent:    pointer.Int64(70),
+				MemoryReclaimThresholdPercent: pointer.Int64(75),
+				DegradeTimeMinutes:            pointer.Int64(15),
+				UpdateTimeThresholdSeconds:    pointer.Int64(300),
+				ResourceDiffThreshold:         pointer.Float64(0.1),
+			},
+		},
+		{
+			name: "get strategy while parse node reclaim ratios failed",
+			args: args{
+				cfg: &configuration.ColocationCfg{
+					ColocationStrategy: configuration.ColocationStrategy{
+						Enable:                        pointer.Bool(false),
+						CPUReclaimThresholdPercent:    pointer.Int64(65),
+						MemoryReclaimThresholdPercent: pointer.Int64(65),
+						DegradeTimeMinutes:            pointer.Int64(15),
+						UpdateTimeThresholdSeconds:    pointer.Int64(300),
+						ResourceDiffThreshold:         pointer.Float64(0.1),
+					},
+				},
+				node: &corev1.Node{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "test-node",
+						Labels: map[string]string{
+							extension.LabelCPUReclaimRatio:    "-1",
+							extension.LabelMemoryReclaimRatio: "invalidField",
+						},
+					},
+				},
+			},
+			want: &configuration.ColocationStrategy{
+				Enable:                        pointer.Bool(false),
+				CPUReclaimThresholdPercent:    pointer.Int64(65),
+				MemoryReclaimThresholdPercent: pointer.Int64(65),
+				DegradeTimeMinutes:            pointer.Int64(15),
+				UpdateTimeThresholdSeconds:    pointer.Int64(300),
+				ResourceDiffThreshold:         pointer.Float64(0.1),
+			},
+		},
+		{
+			name: "get strategy merged with node strategy on annotations",
+			args: args{
+				cfg: &configuration.ColocationCfg{
+					ColocationStrategy: configuration.ColocationStrategy{
+						Enable:                        pointer.Bool(false),
+						CPUReclaimThresholdPercent:    pointer.Int64(65),
+						MemoryReclaimThresholdPercent: pointer.Int64(65),
+						DegradeTimeMinutes:            pointer.Int64(15),
+						UpdateTimeThresholdSeconds:    pointer.Int64(300),
+						ResourceDiffThreshold:         pointer.Float64(0.1),
+					},
+				},
+				node: &corev1.Node{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "test-node",
+						Annotations: map[string]string{
+							extension.AnnotationNodeColocationStrategy: `
+{
+  "cpuReclaimThresholdPercent": 70,
+  "memoryReclaimThresholdPercent": 75
+}
+`,
+						},
+					},
+				},
+			},
+			want: &configuration.ColocationStrategy{
+				Enable:                        pointer.Bool(false),
+				CPUReclaimThresholdPercent:    pointer.Int64(70),
+				MemoryReclaimThresholdPercent: pointer.Int64(75),
+				DegradeTimeMinutes:            pointer.Int64(15),
+				UpdateTimeThresholdSeconds:    pointer.Int64(300),
+				ResourceDiffThreshold:         pointer.Float64(0.1),
+			},
+		},
+		{
+			name: "get strategy disabled by node strategy on annotations",
+			args: args{
+				cfg: &configuration.ColocationCfg{
+					ColocationStrategy: configuration.ColocationStrategy{
+						Enable:                        pointer.Bool(true),
+						CPUReclaimThresholdPercent:    pointer.Int64(65),
+						MemoryReclaimThresholdPercent: pointer.Int64(65),
+						DegradeTimeMinutes:            pointer.Int64(15),
+						UpdateTimeThresholdSeconds:    pointer.Int64(300),
+						ResourceDiffThreshold:         pointer.Float64(0.1),
+					},
+				},
+				node: &corev1.Node{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "test-node",
+						Annotations: map[string]string{
+							extension.AnnotationNodeColocationStrategy: `{"enable": false}`,
+						},
+						Labels: map[string]string{},
+					},
+				},
+			},
+			want: &configuration.ColocationStrategy{
+				Enable:                        pointer.Bool(false),
 				CPUReclaimThresholdPercent:    pointer.Int64(65),
 				MemoryReclaimThresholdPercent: pointer.Int64(65),
 				DegradeTimeMinutes:            pointer.Int64(15),
@@ -266,9 +404,144 @@ func Test_GetNodeColocationStrategy(t *testing.T) {
 	}
 }
 
+func TestUpdateColocationStrategyForNode(t *testing.T) {
+	defaultCfg := DefaultColocationStrategy()
+	disabledCfg := defaultCfg.DeepCopy()
+	disabledCfg.Enable = pointer.Bool(false)
+	cfg1 := defaultCfg.DeepCopy()
+	cfg1.CPUReclaimThresholdPercent = pointer.Int64(100)
+	cfg2 := defaultCfg.DeepCopy()
+	cfg2.CPUReclaimThresholdPercent = pointer.Int64(80)
+	type args struct {
+		strategy *configuration.ColocationStrategy
+		node     *corev1.Node
+	}
+	tests := []struct {
+		name      string
+		args      args
+		wantField *configuration.ColocationStrategy
+	}{
+		{
+			name: "no node-level modification",
+			args: args{
+				strategy: defaultCfg.DeepCopy(),
+				node:     &corev1.Node{},
+			},
+			wantField: defaultCfg.DeepCopy(),
+		},
+		{
+			name: "update strategy according to annotations",
+			args: args{
+				strategy: defaultCfg.DeepCopy(),
+				node: &corev1.Node{
+					ObjectMeta: metav1.ObjectMeta{
+						Annotations: map[string]string{
+							extension.AnnotationNodeColocationStrategy: `{"enable": false}`,
+						},
+					},
+				},
+			},
+			wantField: disabledCfg,
+		},
+		{
+			name: "update strategy according to ratios",
+			args: args{
+				strategy: defaultCfg.DeepCopy(),
+				node: &corev1.Node{
+					ObjectMeta: metav1.ObjectMeta{
+						Annotations: map[string]string{},
+						Labels: map[string]string{
+							extension.LabelCPUReclaimRatio: `1.0`,
+						},
+					},
+				},
+			},
+			wantField: cfg1,
+		},
+		{
+			name: "update strategy according to mixed node configs",
+			args: args{
+				strategy: defaultCfg.DeepCopy(),
+				node: &corev1.Node{
+					ObjectMeta: metav1.ObjectMeta{
+						Annotations: map[string]string{
+							extension.AnnotationNodeColocationStrategy: `{"cpuReclaimThresholdPercent": 100}`,
+						},
+						Labels: map[string]string{
+							extension.LabelCPUReclaimRatio: `0.8`,
+						},
+					},
+				},
+			},
+			wantField: cfg2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			UpdateColocationStrategyForNode(tt.args.strategy, tt.args.node)
+			assert.Equal(t, tt.wantField, tt.args.strategy)
+		})
+	}
+}
+
+func TestGetColocationStrategyOnNode(t *testing.T) {
+	tests := []struct {
+		name    string
+		arg     *corev1.Node
+		want    *configuration.ColocationStrategy
+		wantErr bool
+	}{
+		{
+			name: "get no strategy",
+			arg:  &corev1.Node{},
+		},
+		{
+			name: "get no strategy 1",
+			arg: &corev1.Node{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{},
+				},
+			},
+		},
+		{
+			name: "parse strategy failed",
+			arg: &corev1.Node{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						extension.AnnotationNodeColocationStrategy: `invalidField`,
+					},
+				},
+			},
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name: "parse strategy correctly",
+			arg: &corev1.Node{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						extension.AnnotationNodeColocationStrategy: `{"enable": true}`,
+					},
+				},
+			},
+			want: &configuration.ColocationStrategy{
+				Enable: pointer.Bool(true),
+			},
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, gotErr := GetColocationStrategyOnNode(tt.arg)
+			assert.Equal(t, tt.want, got)
+			assert.Equal(t, tt.wantErr, gotErr != nil, gotErr)
+		})
+	}
+}
+
 func Test_IsColocationStrategyValid(t *testing.T) {
 	type args struct {
-		strategy *extension.ColocationStrategy
+		strategy *configuration.ColocationStrategy
 	}
 	tests := []struct {
 		name string
@@ -283,7 +556,7 @@ func Test_IsColocationStrategyValid(t *testing.T) {
 		{
 			name: "partial strategy is valid",
 			args: args{
-				strategy: &extension.ColocationStrategy{
+				strategy: &configuration.ColocationStrategy{
 					Enable: pointer.Bool(true),
 				},
 			},
@@ -292,7 +565,7 @@ func Test_IsColocationStrategyValid(t *testing.T) {
 		{
 			name: "partial strategy is valid 1",
 			args: args{
-				strategy: &extension.ColocationStrategy{
+				strategy: &configuration.ColocationStrategy{
 					Enable:                     pointer.Bool(true),
 					DegradeTimeMinutes:         pointer.Int64(15),
 					UpdateTimeThresholdSeconds: pointer.Int64(300),
@@ -304,7 +577,7 @@ func Test_IsColocationStrategyValid(t *testing.T) {
 		{
 			name: "partial strategy is valid 2",
 			args: args{
-				strategy: &extension.ColocationStrategy{
+				strategy: &configuration.ColocationStrategy{
 					Enable:                        pointer.Bool(true),
 					CPUReclaimThresholdPercent:    pointer.Int64(65),
 					MemoryReclaimThresholdPercent: pointer.Int64(65),
@@ -317,7 +590,7 @@ func Test_IsColocationStrategyValid(t *testing.T) {
 		{
 			name: "partial strategy is valid 3",
 			args: args{
-				strategy: &extension.ColocationStrategy{
+				strategy: &configuration.ColocationStrategy{
 					Enable:                        pointer.Bool(true),
 					CPUReclaimThresholdPercent:    pointer.Int64(65),
 					MemoryReclaimThresholdPercent: pointer.Int64(65),
@@ -330,7 +603,7 @@ func Test_IsColocationStrategyValid(t *testing.T) {
 		{
 			name: "default strategy is valid",
 			args: args{
-				strategy: &extension.ColocationStrategy{
+				strategy: &configuration.ColocationStrategy{
 					Enable:                        pointer.Bool(true),
 					CPUReclaimThresholdPercent:    pointer.Int64(65),
 					MemoryReclaimThresholdPercent: pointer.Int64(65),
@@ -352,7 +625,7 @@ func Test_IsColocationStrategyValid(t *testing.T) {
 
 func Test_IsNodeColocationCfgValid(t *testing.T) {
 	type args struct {
-		nodeCfg *extension.NodeColocationCfg
+		nodeCfg *configuration.NodeColocationCfg
 	}
 	tests := []struct {
 		name string
@@ -367,8 +640,8 @@ func Test_IsNodeColocationCfgValid(t *testing.T) {
 		{
 			name: "node selector is valid",
 			args: args{
-				nodeCfg: &extension.NodeColocationCfg{
-					NodeCfgProfile: extension.NodeCfgProfile{
+				nodeCfg: &configuration.NodeColocationCfg{
+					NodeCfgProfile: configuration.NodeCfgProfile{
 						NodeSelector: &metav1.LabelSelector{
 							MatchExpressions: []metav1.LabelSelectorRequirement{
 								{
@@ -380,7 +653,7 @@ func Test_IsNodeColocationCfgValid(t *testing.T) {
 						},
 						Name: "xxx-out-yyy",
 					},
-					ColocationStrategy: extension.ColocationStrategy{
+					ColocationStrategy: configuration.ColocationStrategy{
 						Enable: pointer.Bool(false),
 					},
 				},
@@ -390,8 +663,8 @@ func Test_IsNodeColocationCfgValid(t *testing.T) {
 		{
 			name: "label selector should not be nil",
 			args: args{
-				nodeCfg: &extension.NodeColocationCfg{
-					NodeCfgProfile: extension.NodeCfgProfile{
+				nodeCfg: &configuration.NodeColocationCfg{
+					NodeCfgProfile: configuration.NodeCfgProfile{
 						NodeSelector: &metav1.LabelSelector{
 							MatchExpressions: []metav1.LabelSelectorRequirement{
 								{
@@ -403,7 +676,7 @@ func Test_IsNodeColocationCfgValid(t *testing.T) {
 						},
 						Name: "xxx-in-yyy",
 					},
-					ColocationStrategy: extension.ColocationStrategy{
+					ColocationStrategy: configuration.ColocationStrategy{
 						Enable: pointer.Bool(false),
 					},
 				},
@@ -413,8 +686,8 @@ func Test_IsNodeColocationCfgValid(t *testing.T) {
 		{
 			name: "label selector should not be nil",
 			args: args{
-				nodeCfg: &extension.NodeColocationCfg{
-					NodeCfgProfile: extension.NodeCfgProfile{
+				nodeCfg: &configuration.NodeColocationCfg{
+					NodeCfgProfile: configuration.NodeCfgProfile{
 						NodeSelector: &metav1.LabelSelector{
 							MatchLabels: map[string]string{
 								"aaa": "bbb",
@@ -422,7 +695,7 @@ func Test_IsNodeColocationCfgValid(t *testing.T) {
 						},
 						Name: "aaa-bbb",
 					},
-					ColocationStrategy: extension.ColocationStrategy{},
+					ColocationStrategy: configuration.ColocationStrategy{},
 				},
 			},
 			want: false,
@@ -430,8 +703,8 @@ func Test_IsNodeColocationCfgValid(t *testing.T) {
 		{
 			name: "a valid node config has a valid label selector and non-empty strategy",
 			args: args{
-				nodeCfg: &extension.NodeColocationCfg{
-					NodeCfgProfile: extension.NodeCfgProfile{
+				nodeCfg: &configuration.NodeColocationCfg{
+					NodeCfgProfile: configuration.NodeCfgProfile{
 						NodeSelector: &metav1.LabelSelector{
 							MatchLabels: map[string]string{
 								"xxx": "yyy",
@@ -439,7 +712,7 @@ func Test_IsNodeColocationCfgValid(t *testing.T) {
 						},
 						Name: "xxx-yyy",
 					},
-					ColocationStrategy: extension.ColocationStrategy{
+					ColocationStrategy: configuration.ColocationStrategy{
 						Enable: pointer.Bool(false),
 					},
 				},
